@@ -8,6 +8,7 @@ import logging
 import logging.handlers
 import sys
 import threading
+import time
 
 import servicemanager
 import win32service
@@ -27,7 +28,9 @@ def logger():
         path.parent.mkdir(parents=True, exist_ok=True)
         handler = logging.handlers.TimedRotatingFileHandler(path, when="midnight", utc=True,
                                                            backupCount=7, encoding="utf-8")
-        handler.setFormatter(logging.Formatter("%(asctime)s %(levelname)s %(message)s"))
+        formatter = logging.Formatter("%(asctime)sZ %(levelname)s %(message)s", datefmt="%Y-%m-%dT%H:%M:%S")
+        formatter.converter = time.gmtime
+        handler.setFormatter(formatter)
         log.addHandler(handler)
         log.setLevel(logging.INFO)
     return log

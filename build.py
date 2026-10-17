@@ -33,10 +33,13 @@ def main():
     run(*common, "--name", "NetTimeNextService", "--console", "service_host.py")
     notices = ROOT / "dist" / "THIRD-PARTY-LICENSES"
     notices.mkdir(exist_ok=True)
+    for old in notices.iterdir():
+        if old.is_file():
+            old.unlink()
     for package in ("pywin32", "pyinstaller", "altgraph", "pywin32-ctypes", "pefile", "packaging"):
         distribution = importlib.metadata.distribution(package)
         for file in distribution.files or []:
-            if "license" in str(file).lower() or Path(file).name.lower() == "copying.txt":
+            if Path(file).name.lower().startswith(("license", "copying", "copyright")):
                 source = Path(distribution.locate_file(file))
                 if source.is_file():
                     shutil.copy2(source, notices / (package + "-" + source.name))

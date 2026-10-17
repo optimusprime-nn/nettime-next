@@ -47,8 +47,8 @@ records the address actually contacted.
 ## Settings
 
 The redesigned settings window separates **Servers**, **Security & NTS**,
-**Polling**, **Clock correction**, and **History & logs**. Save and reopen the
-application to apply changes. Editing a server requires **Replace selected**;
+**Polling**, **Clock correction**, and **History & logs**. Source mode saves for
+restart; the installed app applies settings through its service helper. Editing a server requires **Replace selected**;
 adding requires **Add server**, followed by **Save for restart**.
 
 - Plain NTP is explicitly labelled **unauthenticated**, in both UI and logs.

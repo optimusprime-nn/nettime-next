@@ -171,9 +171,11 @@ def apply_config(path):
         Store(root / "data" / "history.sqlite3", cfg["retention_days"]).event("settings_applied", {"old": old, "new": cfg})
         if running:
             action("start")
-    except Exception:
+    except Exception as exc:
         temp.write_text(previous, encoding="utf-8")
         temp.replace(config)
+        Store(root / "data" / "history.sqlite3").event("settings_rolled_back", {
+            "restored": old, "attempted": cfg, "reason": str(exc)})
         if running:
             action("start")
         raise

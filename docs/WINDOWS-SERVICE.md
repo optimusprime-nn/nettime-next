@@ -23,8 +23,8 @@ Starting/stopping the service or applying settings uses an administrative helper
 with Windows elevation. Saving settings validates the file, stops the service,
 atomically replaces configuration, records the change and restarts a previously
 running service. On failure it restores the previous configuration. Application
-settings are never interpreted as executable code. The app's server list is
-refreshed after reopening following changes.
+settings are never interpreted as executable code. The app refreshes its server
+list after applying changes.
 
 The service is configured to restart after failures with backoff. Startup errors
 and unexpected monitor failures propagate to the Service Control Manager.
