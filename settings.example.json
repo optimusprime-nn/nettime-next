@@ -1,0 +1,10 @@
+{
+  "servers": [
+    {"host": "time-a-b.nist.gov", "port": 123, "security": "plain_ntp"},
+    {"host": "time-b-b.nist.gov", "port": 123, "security": "plain_ntp"}
+  ],
+  "poll_seconds": 64,
+  "timeout_seconds": 3,
+  "retention_days": 7,
+  "max_distance_ms": 1000
+}

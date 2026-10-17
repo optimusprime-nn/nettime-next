@@ -1,0 +1,17 @@
+__pycache__/
+*.py[cod]
+.venv/
+build/
+dist/
+data/
+initial-evidence/
+settings.json
+*.sqlite3*
+*.lock
+*.log
+*.exe
+*.msi
+*.zip
+tools/
+work/
+VALIDATION.md
