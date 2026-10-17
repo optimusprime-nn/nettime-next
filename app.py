@@ -33,6 +33,24 @@ def number(value, signed=False):
     return f"{value:+.3f}" if signed else f"{value:.3f}"
 
 
+def ranking_evidence(candidate, latest):
+    if not candidate:
+        return "No eligible ranking sample. Latest measurements remain in the history."
+    parts = candidate.get("distance_components_ms")
+    text = (f"Ranking sample: {utc(candidate.get('ranking_sample_utc'))} · age {candidate['sample_age_seconds']:.1f}s · "
+            f"offset {number(candidate['offset_ms'], True)} ms · RTT {number(candidate['delay_ms'])} ms.\n"
+            f"Latest sample: {utc(latest.get('utc'))} · offset {number(latest.get('offset_ms'), True)} ms · "
+            f"RTT {number(latest.get('delay_ms'))} ms.")
+    if parts:
+        text += (f"\nRanking estimate {candidate['distance_ms']:.3f} ms = "
+                 f"network RTT/2 {parts['network_half_rtt_ms']:.3f} + upstream delay/2 {parts['upstream_half_delay_ms']:.3f} + "
+                 f"root dispersion {parts['root_dispersion_ms']:.3f} + age allowance {parts['age_allowance_ms']:.3f} + "
+                 f"observer guard {parts['observer_precision_guard_ms']:.3f} + client-relative variation {parts['client_offset_variation_ms']:.3f}.")
+    else:
+        text += "\nLegacy record: component breakdown was not logged by the earlier version."
+    return text
+
+
 def gui(cfg, store, smoke=False, config_path=BASE / "settings.json", service_view=False):
     import tkinter as tk
     from tkinter import filedialog, messagebox, ttk
@@ -62,14 +80,20 @@ def gui(cfg, store, smoke=False, config_path=BASE / "settings.json", service_vie
     explanation = tk.StringVar(value="Recommendations are experimental; no system clock changes are made.")
     ttk.Label(outer, textvariable=explanation, wraplength=1240).pack(anchor="w", pady=(4, 14))
 
-    columns = ("host", "status", "stratum", "offset", "delay", "jitter", "reach", "refid", "leap", "security", "next")
-    table = ttk.Treeview(outer, columns=columns, show="headings", height=max(5, min(10, len(cfg["servers"]))))
+    columns = ("host", "status", "stratum", "offset", "delay", "jitter", "estimate", "age", "reach", "refid", "leap", "security", "next")
+    table_frame = ttk.Frame(outer)
+    table_frame.pack(fill="x")
+    table = ttk.Treeview(table_frame, columns=columns, show="headings", height=max(5, min(10, len(cfg["servers"]))))
     for key, title, width in zip(columns,
-            ("Server", "Measurement", "Stratum", "Offset ms", "Delay ms", "Jitter ms", "Reach", "Reference ID", "LI", "Security", "Next check"),
-            (200, 115, 70, 90, 90, 85, 60, 110, 40, 150, 90)):
+            ("Server", "Measurement", "Stratum", "Latest offset ms", "Latest RTT ms", "Client variation ms", "Rank estimate ms", "Rank age s", "Reach", "Advertised refID", "LI", "Security", "Next check"),
+            (190, 105, 70, 120, 110, 135, 125, 85, 60, 120, 40, 140, 90)):
         table.heading(key, text=title)
-        table.column(key, width=width, minwidth=40, stretch=key in ("host", "refid"))
+        table.column(key, width=width, minwidth=width, stretch=key in ("host", "refid"))
     table.pack(fill="x")
+    scroll = ttk.Scrollbar(table_frame, orient="horizontal", command=table.xview)
+    scroll.pack(fill="x")
+    table.configure(xscrollcommand=scroll.set)
+    ttk.Label(outer, text="Latest values and ranking samples can differ. Client variation includes PC drift/corrections; it is not physical PPS jitter.", wraplength=1250).pack(anchor="w", pady=(5, 0))
     table.tag_configure("selected", background="#e2f5ec", foreground="#145b3b")
     table.tag_configure("failed", foreground="#a33232")
     for server in cfg["servers"]:
@@ -84,6 +108,8 @@ def gui(cfg, store, smoke=False, config_path=BASE / "settings.json", service_vie
     tabs.add(details_panel, text="Full decision evidence")
     reason = tk.StringVar(value="Select a server to inspect its history and selection reason.")
     ttk.Label(history_panel, textvariable=reason, wraplength=1200).pack(anchor="w")
+    evidence = tk.StringVar()
+    ttk.Label(history_panel, textvariable=evidence, wraplength=1200).pack(anchor="w", pady=(6, 0))
     statistics = tk.StringVar()
     ttk.Label(history_panel, textvariable=statistics, wraplength=1200).pack(anchor="w", pady=7)
     canvas = tk.Canvas(history_panel, bg="white", highlightthickness=0, height=190)
@@ -112,6 +138,8 @@ def gui(cfg, store, smoke=False, config_path=BASE / "settings.json", service_vie
         key = selected[0]
         peer = next(p for p in monitor.peers if p.key == key)
         server = next((s for s in last.get("servers", []) if s["peer"] == key), None)
+        candidate = next((c for c in last.get("candidates", []) if c["peer"] == key), None)
+        evidence.set(ranking_evidence(candidate, (server or {}).get("latest") or {}))
         reason.set((server["reason"] if server else peer.disabled or "Waiting for measurement") +
                    "  |  Reach is an octal bitmap of the last eight attempted checks.")
         try:
@@ -256,6 +284,7 @@ def gui(cfg, store, smoke=False, config_path=BASE / "settings.json", service_vie
                         table.item(server["peer"], tags=(tag,), values=(server["peer"], s.get("status", "Waiting"),
                             s.get("stratum") if s.get("stratum") is not None else "—",
                             number(s.get("offset_ms"), True), number(s.get("delay_ms")), number(c.get("jitter_ms")),
+                            number(c.get("distance_ms")), number(c.get("sample_age_seconds")),
                             server["reach_octal"], s.get("reference_id", "—"),
                             s.get("leap") if s.get("leap") is not None else "—",
                             "NTS blocked" if s.get("security_mode") == "nts_required" else "Unauthenticated", ""))

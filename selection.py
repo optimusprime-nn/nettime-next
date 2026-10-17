@@ -8,6 +8,7 @@ from dataclasses import dataclass, field
 from protocol import Sample
 
 POLICY = "observer-consensus-v1 (experimental; not a synchronization engine)"
+EVIDENCE_VERSION = 2
 
 
 @dataclass
@@ -49,13 +50,26 @@ class Peer:
                            / max(1, len(usable) - 1))
         age = max(0, now - best.mono)
         precision_ms = 1000 * 2.0 ** max(-32, min(0, best.precision))
-        distance = (max(0, best.root_delay_ms) + best.delay_ms) / 2
-        distance += best.root_dispersion_ms + age * 0.015 + max(1, precision_ms) + jitter
+        components = dict(network_half_rtt_ms=best.delay_ms / 2,
+                          upstream_half_delay_ms=max(0, best.root_delay_ms) / 2,
+                          root_dispersion_ms=best.root_dispersion_ms,
+                          age_allowance_ms=age * 0.015,
+                          observer_precision_guard_ms=max(1, precision_ms),
+                          client_offset_variation_ms=jitter)
+        distance = sum(components.values())
         value = dict(peer=self.key, address=best.address, port=self.port,
                      offset_ms=best.offset_ms, delay_ms=best.delay_ms,
                      stratum=best.stratum, jitter_ms=jitter, distance_ms=distance,
                      filter_samples=len(usable), sample_age_seconds=age,
-                     reference_id=best.reference_id)
+                     reference_id=best.reference_id,
+                     ranking_sample_utc=best.utc, ranking_sample_mono=best.mono,
+                     latest_sample_utc=self.latest.utc,
+                     latest_offset_ms=self.latest.offset_ms,
+                     latest_delay_ms=self.latest.delay_ms,
+                     distance_components_ms=components,
+                     age_rate_ppm=15,
+                     jitter_kind="RMS client-relative offsets around minimum-RTT sample; includes local clock drift/corrections",
+                     reference_id_kind="server-advertised identifier; not hardware classification")
         if distance > max_distance_ms:
             return None, f"Estimated distance {distance:.3f} ms exceeds {max_distance_ms:g} ms limit"
         return value, "Candidate"
@@ -73,7 +87,7 @@ def recommend(peers, now, max_distance_ms=1000):
             else:
                 endpoints.add(endpoint)
                 candidates.append(candidate)
-    result = dict(policy=POLICY, selected=None, confidence="none", reasons=reasons,
+    result = dict(policy=POLICY, evidence_version=EVIDENCE_VERSION, selected=None, confidence="none", reasons=reasons,
                   candidates=candidates, explanation="No eligible source; no recommendation")
     if not candidates:
         return result
@@ -104,7 +118,7 @@ def recommend(peers, now, max_distance_ms=1000):
         else:
             reasons[c["peer"]] = (f"Recommended: lowest estimated distance among agreeing sources "
                                    f"({c['distance_ms']:.3f} ms; jitter {c['jitter_ms']:.3f} ms; "
-                                   f"stratum {c['stratum']})")
+                                   f"stratum {c['stratum']}; ranking sample {c['sample_age_seconds']:.1f}s old)")
     result.update(selected=chosen["peer"],
                   confidence="single source / uncorroborated" if len(candidates) == 1 else "endpoint agreement / independence unverified",
                   explanation=reasons[chosen["peer"]])

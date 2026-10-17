@@ -1,5 +1,15 @@
 # Change history
 
+## 0.2.2 — Auditable ranking and timestamp correction
+
+- Distinguish latest measurements from historical ranking samples in the UI.
+- Show ranking age/estimate and log all score components and sample timestamps.
+- Label offset variation as client-relative and reference IDs as advertised.
+- Preserve physical local T1 instead of replacing it with a randomized request
+  timestamp; limit randomization to sub-60-nanosecond fraction bits.
+- Document the exact TS1 / GPS-disciplined Raspberry Pi decision in
+  `docs/SELECTION-AUDIT.md`. No hardware preference or ranking-weight change.
+
 ## 0.2.1 — Read-only database startup fix
 
 - Fix desktop startup failure when users have read-only access to the service's

@@ -86,6 +86,7 @@ class Sample:
     t3: float | None = None
     t4: float | None = None
     request_hex: str = ""
+    request_transmit_utc: float | None = None
     reply_hex: str = ""
     kod: str = ""
     security_mode: str = "plain_ntp"
@@ -179,10 +180,12 @@ def query(host: str, port: int, timeout: float, poll_seconds: float, cycle: int 
             sample.t1 = utc_now()
             start = time.perf_counter()
             stamp = bytearray(encode_time(sample.t1))
-            # Randomize low fraction bits (<16 microseconds) for correlation.
-            stamp[-2:] = secrets.token_bytes(2)
+            # Randomize only bits below 60 ns, below the UTC API's resolution.
+            # Keep the captured local T1: a request nonce must never replace a
+            # measured timestamp used in the four-timestamp calculation.
+            stamp[-1:] = secrets.token_bytes(1)
             packet[40:48] = stamp
-            sample.t1 = decode_time(bytes(stamp), sample.t1)
+            sample.request_transmit_utc = decode_time(bytes(stamp), sample.t1)
             sample.request_hex = packet.hex()
             sock.send(packet)
             raw = sock.recv(65535)

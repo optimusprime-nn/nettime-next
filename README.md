@@ -1,4 +1,4 @@
-# NetTime Next — Windows service preview 0.2.1
+# NetTime Next — Windows service preview 0.2.2
 
 This first working build monitors every configured time source while the existing
 NetTime service continues controlling the PC clock. It cannot change the clock.
@@ -7,7 +7,7 @@ implemented**. Its source recommendation is explicitly experimental.
 
 ## Install the Windows build
 
-Run `NetTimeNext-0.2.1-Setup-x64.exe` and approve Windows elevation. Python does
+Run `NetTimeNext-0.2.2-Setup-x64.exe` and approve Windows elevation. Python does
 not need to be installed on the destination computer. The installer adds the
 automatically starting **NetTime Next Observer** Windows service and a desktop
 app accessible from the Start menu. The original NetTime service is not changed.
@@ -99,6 +99,12 @@ All persisted timestamps are Unix UTC; graph labels show ISO UTC. No credentials
 or NTS keys/cookies are logged. Data remains local.
 
 ## Diagnostic recommendation, not clock control
+
+Version 0.2.2 explicitly separates the latest displayed measurement from the
+minimum-RTT ranking sample. Select a source to inspect both epochs and the full
+score breakdown. "Client variation" includes Windows clock drift/corrections;
+it is not a physical PPS-jitter measurement. See the matching recorded
+[TS1 / Raspberry Pi selection audit](docs/SELECTION-AUDIT.md).
 
 The observer filters up to eight recent valid samples using minimum round-trip
 delay, estimates jitter and uncertainty, rejects stale/overly uncertain sources,

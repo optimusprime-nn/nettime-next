@@ -8,6 +8,7 @@ import time
 import unittest
 from pathlib import Path
 from unittest.mock import patch
+from unittest.mock import MagicMock
 
 from monitor import InstanceLock, Monitor, control_state, load_config, validate_config
 from protocol import InvalidReply, KissOfDeath, Sample, decode_time, encode_time, parse_reply, query
@@ -42,6 +43,30 @@ def peer(host, offset=0, delay=10, stratum=2, root_dispersion=1, address=None):
 
 
 class ProtocolTests(unittest.TestCase):
+    def test_request_randomization_does_not_replace_measured_t1(self):
+        raw, _, template = fixture()
+        sent = []
+        sock = MagicMock()
+        sock.__enter__.return_value = sock
+        sock.getsockname.return_value = ("192.0.2.2", 55000)
+        sock.send.side_effect = lambda packet: sent.append(bytes(packet))
+        def response(size):
+            reply = bytearray(raw)
+            reply[24:32] = sent[0][40:48]
+            return bytes(reply)
+        sock.recv.side_effect = response
+        with patch("protocol.socket.getaddrinfo", return_value=[(socket.AF_INET, socket.SOCK_DGRAM, 17, "", ("192.0.2.1", 123))]), \
+             patch("protocol.socket.socket", return_value=sock), \
+             patch("protocol.utc_now", side_effect=[template.t1, template.t1, template.t4]), \
+             patch("protocol.time.perf_counter", side_effect=[100, 100, 100.021]), \
+             patch("protocol.secrets.token_bytes", return_value=b"\xff") as random:
+            sample = query("test", 123, 1, 64)
+        self.assertEqual(sample.status, "valid", sample.reason)
+        self.assertEqual(sample.t1, template.t1)
+        self.assertAlmostEqual(sample.offset_ms, 0, places=3)
+        random.assert_called_once_with(1)
+        self.assertNotEqual(sent[0][40:48], encode_time(template.t1))
+
     def test_four_timestamp_calculation(self):
         raw, stamp, sample = fixture()
         result = parse_reply(raw, stamp, sample)
@@ -145,6 +170,35 @@ class ProtocolTests(unittest.TestCase):
 
 
 class SelectionTests(unittest.TestCase):
+    def test_ranking_sample_and_latest_measurement_are_distinct_and_explained(self):
+        from app import ranking_evidence
+        p = peer("ts1", offset=-7.159114, delay=.141382, root_dispersion=.091553)
+        p.latest.utc = 1000
+        latest = copy.deepcopy(p.latest)
+        latest.offset_ms, latest.delay_ms, latest.mono, latest.utc = -10.944605, .171185, 229, 1129
+        p.accept(latest)
+        candidate, _ = p.candidate(229.1350751, 1000)
+        parts = candidate["distance_components_ms"]
+        self.assertAlmostEqual(parts["age_allowance_ms"], 1.9370261265)
+        self.assertAlmostEqual(sum(parts.values()), candidate["distance_ms"])
+        self.assertEqual(candidate["ranking_sample_utc"], 1000)
+        self.assertEqual(candidate["latest_sample_utc"], 1129)
+        self.assertEqual(candidate["latest_offset_ms"], latest.offset_ms)
+        text = ranking_evidence(candidate, latest.data())
+        self.assertIn("-7.159", text)
+        self.assertIn("-10.945", text)
+        self.assertIn("age allowance 1.937", text)
+
+    def test_reference_id_does_not_classify_or_rank_hardware(self):
+        ts1, pi = peer("ts1"), peer("pi")
+        ts1.latest.reference_id, pi.latest.reference_id = "GPS", "PPS"
+        before = recommend([ts1, pi], 100)
+        ts1.latest.reference_id, pi.latest.reference_id = "PPS", "GPS"
+        after = recommend([ts1, pi], 100)
+        self.assertEqual(before["selected"], after["selected"])
+        self.assertEqual([c["distance_ms"] for c in before["candidates"]],
+                         [c["distance_ms"] for c in after["candidates"]])
+
     def test_all_sources_have_reasons_and_outlier_is_excluded(self):
         peers = [peer("a", 0), peer("b", 1), peer("c", 2), peer("bad", 500)]
         decision = recommend(peers, 100)
