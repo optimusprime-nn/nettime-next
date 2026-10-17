@@ -12,8 +12,12 @@ def show_settings(parent, cfg, config_path, store, on_save, save_handler=None):
 
     window = tk.Toplevel(parent)
     window.title("NetTime Next · Settings")
-    window.geometry("1000x730")
-    window.minsize(900, 650)
+    dpi_layout = getattr(parent, "_nettime_dpi", None)
+    if dpi_layout:
+        dpi_layout.size_window(window, 1000, 730, 900, 650)
+    else:
+        window.geometry("1000x730")
+        window.minsize(900, 650)
     window.transient(parent)
     window.grab_set()
     draft = copy.deepcopy(cfg)
@@ -161,4 +165,6 @@ def show_settings(parent, cfg, config_path, store, on_save, save_handler=None):
     ttk.Label(footer, text="No clock-control settings are applied to the running NetTime service.").pack(side="left")
     ttk.Button(footer, text="Save & restart service…" if save_handler else "Save for restart", command=save).pack(side="right", padx=(8, 0))
     ttk.Button(footer, text="Cancel", command=window.destroy).pack(side="right")
+    if dpi_layout:
+        dpi_layout.apply()
     return window

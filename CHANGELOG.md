@@ -1,5 +1,17 @@
 # Change history
 
+## 0.2.3 — Native high-DPI desktop rendering
+
+- Embed Per-Monitor V2 DPI awareness in the desktop executable so Windows does
+  not enlarge an unaware bitmap of its text and controls.
+- Enable equivalent awareness for source runs before creating Tk windows.
+- Match Tk point scaling to window DPI; scale rows, columns, padding, chart
+  margins and settings-window geometry. Refresh metrics when window DPI changes.
+- Reserve footer space before the expanding history panel so action controls
+  remain accessible at increased display scaling.
+- Check 100%, 125%, 150% and 200% layout metrics; verify the packaged manifest
+  and the installed app's actual Windows/Tk DPI state in CI.
+
 ## 0.2.2 — Auditable ranking and timestamp correction
 
 - Distinguish latest measurements from historical ranking samples in the UI.

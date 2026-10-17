@@ -1,4 +1,4 @@
-# NetTime Next — Windows service preview 0.2.2
+# NetTime Next — Windows service preview 0.2.3
 
 This first working build monitors every configured time source while the existing
 NetTime service continues controlling the PC clock. It cannot change the clock.
@@ -7,7 +7,7 @@ implemented**. Its source recommendation is explicitly experimental.
 
 ## Install the Windows build
 
-Run `NetTimeNext-0.2.2-Setup-x64.exe` and approve Windows elevation. Python does
+Run `NetTimeNext-0.2.3-Setup-x64.exe` and approve Windows elevation. Python does
 not need to be installed on the destination computer. The installer adds the
 automatically starting **NetTime Next Observer** Windows service and a desktop
 app accessible from the Start menu. The original NetTime service is not changed.
@@ -20,6 +20,10 @@ own writable data directory. Saving service settings requests administrator
 approval and restarts the observer service. This preview installer is unsigned.
 
 See [Windows service deployment and build details](docs/WINDOWS-SERVICE.md).
+
+Version 0.2.3 enables native high-DPI desktop rendering and scales pixel layout
+metrics alongside fonts. Existing installations can be upgraded directly while
+preserving settings and recorded history.
 
 Upgrading from 0.2.0 fixes the read-only database startup error. Install over the
 existing version; the installer stops/restarts its own service and migrates the

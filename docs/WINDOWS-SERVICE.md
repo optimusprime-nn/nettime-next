@@ -1,4 +1,4 @@
-# Windows service preview 0.2.2
+# Windows service preview 0.2.3
 
 The installer bundles Python and all runtime dependencies. A separate Python
 installation is not required on the destination computer. Windows 10/11 x64 is
@@ -58,7 +58,7 @@ python build.py --iscc path-to-ISCC.exe
 ```
 
 The build runs tests, creates the app/service executables, includes runtime
-license notices and produces `dist/NetTimeNext-0.2.2-Setup-x64.exe`, a checksum and
+license notices and produces `dist/NetTimeNext-0.2.3-Setup-x64.exe`, a checksum and
 a manifest identifying the source commit. Builds are traceable to source and
 pinned dependencies; byte-for-byte reproducible binaries are not claimed.
 

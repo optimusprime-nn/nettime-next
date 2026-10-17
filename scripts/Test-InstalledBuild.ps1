@@ -53,6 +53,13 @@ try {
     if ($upgrade.ExitCode -ne 0) { throw 'Upgrade/reinstall failed' }
     (Get-Service -Name $serviceName).WaitForStatus('Running', [TimeSpan]::FromSeconds(30))
     if ((Get-FileHash -LiteralPath $configFile -Algorithm SHA256).Hash -ne $configHash) { throw 'Upgrade changed machine settings' }
+    $dpiReport = Join-Path $env:TEMP 'nettime-dpi-report.json'
+    $desktop = Join-Path $appRoot 'App\NetTimeNext.exe'
+    $dpiTest = Start-Process -FilePath $desktop -ArgumentList @('--dpi-report', "`"$dpiReport`"") -WindowStyle Hidden -Wait -PassThru
+    if ($dpiTest.ExitCode -ne 0) { throw 'Packaged desktop DPI check failed' }
+    $dpi = Get-Content -LiteralPath $dpiReport -Raw | ConvertFrom-Json
+    if (-not $dpi.per_monitor_v2 -or [Math]::Abs($dpi.window_dpi - $dpi.tk_pixels_per_inch) -ge 2) { throw 'Windows and desktop DPI awareness disagree' }
+    Write-Output ('Native DPI rendering: ' + ($dpi | ConvertTo-Json -Compress))
     $upgradedHealth = & $helper health | ConvertFrom-Json
     if ($upgradedHealth.latest_decision_utc -lt $health.latest_decision_utc -or $upgradedHealth.servers -lt 1) { throw 'Upgrade lost existing measurement evidence' }
     & python (Join-Path $PSScriptRoot 'Check-ServiceReader.py')

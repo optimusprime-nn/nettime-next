@@ -52,14 +52,16 @@ def ranking_evidence(candidate, latest):
 
 
 def gui(cfg, store, smoke=False, config_path=BASE / "settings.json", service_view=False):
+    from ui_dpi import DpiLayout, enable_dpi_awareness
+    enable_dpi_awareness()
     import tkinter as tk
     from tkinter import filedialog, messagebox, ttk
     from tkinter.scrolledtext import ScrolledText
 
     root = tk.Tk()
+    dpi_layout = DpiLayout(root)
     root.title(f"NetTime Next {VERSION} · {'Windows service' if service_view else 'Standalone'} observer")
-    root.geometry("1430x830")
-    root.minsize(1060, 680)
+    dpi_layout.size_window(root, 1430, 830, 1060, 680)
     root.configure(bg="#f4f6fa")
     style = ttk.Style(root)
     style.theme_use("clam")
@@ -157,7 +159,8 @@ def gui(cfg, store, smoke=False, config_path=BASE / "settings.json", service_vie
         else:
             statistics.set("No measurements stored yet. Seven days of history accumulate while the observer runs.")
         canvas.delete("all")
-        width, height = max(canvas.winfo_width(), 300), max(canvas.winfo_height(), 150)
+        px = dpi_layout.px
+        width, height = max(canvas.winfo_width(), px(300)), max(canvas.winfo_height(), px(70))
         valid = [r for r in rows if r[4] == "valid" and r[1] is not None]
         if not valid:
             canvas.create_text(width / 2, height / 2, text="No valid time measurements yet", fill="#68758a")
@@ -167,15 +170,15 @@ def gui(cfg, store, smoke=False, config_path=BASE / "settings.json", service_vie
         ymax = max(r[1] for r in valid)
         margin = max((ymax - ymin) * 0.15, 0.05)
         ymin, ymax = ymin - margin, ymax + margin
-        left, right, top, bottom = 80, width - 25, 25, height - 40
+        left, right, top, bottom = px(80), width - px(25), px(25), height - px(40)
         canvas.create_line(left, top, left, bottom, right, bottom, fill="#a9b5c8")
         for fraction in (0, .5, 1):
             value = ymin + (ymax - ymin) * fraction
             y = bottom - (bottom - top) * fraction
             canvas.create_line(left, y, right, y, fill="#e8ecf3")
-            canvas.create_text(left - 8, y, anchor="e", text=f"{value:+.3f}", fill="#52627b")
-        canvas.create_text(left, height - 16, anchor="w", text=utc(xmin), fill="#52627b")
-        canvas.create_text(right, height - 16, anchor="e", text=utc(xmax), fill="#52627b")
+            canvas.create_text(left - px(8), y, anchor="e", text=f"{value:+.3f}", fill="#52627b")
+        canvas.create_text(left, height - px(16), anchor="w", text=utc(xmin), fill="#52627b")
+        canvas.create_text(right, height - px(16), anchor="e", text=utc(xmax), fill="#52627b")
         previous = None
         for stamp, offset, delay, stratum, sample_status in rows:
             if sample_status != "valid" or offset is None:
@@ -184,8 +187,8 @@ def gui(cfg, store, smoke=False, config_path=BASE / "settings.json", service_vie
             x = left + (stamp - xmin) / (xmax - xmin) * (right - left)
             y = bottom - (offset - ymin) / (ymax - ymin) * (bottom - top)
             if previous and 0 < stamp - previous[2] <= 3 * cfg["poll_seconds"]:
-                canvas.create_line(previous[0], previous[1], x, y, fill="#2864c5", width=2)
-            canvas.create_oval(x - 2, y - 2, x + 2, y + 2, fill="#2864c5", outline="")
+                canvas.create_line(previous[0], previous[1], x, y, fill="#2864c5", width=px(2))
+            canvas.create_oval(x - px(2), y - px(2), x + px(2), y + px(2), fill="#2864c5", outline="")
             previous = x, y, stamp
 
     def export():
@@ -316,6 +319,11 @@ def gui(cfg, store, smoke=False, config_path=BASE / "settings.json", service_vie
         root.after(500, tick)
 
     table.selection_set(table.get_children()[0])
+    # Reserve footer space before the expanding notebook; it must not disappear
+    # when high-DPI fonts and explanatory text need more vertical space.
+    footer.pack_configure(side="bottom", before=tabs)
+    dpi_layout.apply()
+    root.after(500, dpi_layout.watch)
     if smoke:
         root.after(300, root.destroy)
     elif service_view:
@@ -338,7 +346,12 @@ def main():
     parser.add_argument("--service-view", action="store_true", help="Read the installed Windows service without starting another collector")
     parser.add_argument("--standalone", action="store_true", help="Run an independent development collector")
     parser.add_argument("--version", action="version", version=VERSION)
+    parser.add_argument("--dpi-report", type=Path, help=argparse.SUPPRESS)
     args = parser.parse_args()
+    if args.dpi_report:
+        from ui_dpi import diagnostics
+        args.dpi_report.write_text(json.dumps(diagnostics(), indent=2), encoding="utf-8")
+        return
     service_view = args.service_view or (getattr(sys, "frozen", False) and not args.standalone and not args.once and not args.headless)
     if service_view:
         args.config = machine_root() / "settings.json"

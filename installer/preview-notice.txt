@@ -1,4 +1,4 @@
-NetTime Next 0.2.2 — Windows service preview
+NetTime Next 0.2.3 — Windows service preview
 
 This installer adds a separate, automatically starting Windows service named
 NetTimeNext. It measures every configured NTP source and keeps seven days of

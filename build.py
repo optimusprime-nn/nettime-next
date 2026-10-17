@@ -41,7 +41,13 @@ def main():
         VarFileInfo([VarStruct('Translation', [1033,1200])])])''', encoding="utf-8")
     common = [sys.executable, "-m", "PyInstaller", "--noconfirm", "--clean", "--noupx", "--onedir",
               "--add-data", "settings.example.json;.", "--version-file", str(version_file)]
-    run(*common, "--name", "NetTimeNext", "--windowed", "app.py")
+    run(*common, "--name", "NetTimeNext", "--windowed", "--manifest", ROOT / "desktop.manifest", "app.py")
+    from PyInstaller.utils.win32.winmanifest import read_manifest_from_executable
+    import xml.etree.ElementTree as ET
+    embedded = ET.fromstring(read_manifest_from_executable(str(ROOT / "dist" / "NetTimeNext" / "NetTimeNext.exe")))
+    awareness = embedded.find(".//{http://schemas.microsoft.com/SMI/2016/WindowsSettings}dpiAwareness")
+    if awareness is None or awareness.text != "PerMonitorV2":
+        raise RuntimeError("Desktop executable is missing its native DPI-awareness manifest")
     run(*common, "--name", "NetTimeNextService", "--console", "service_host.py")
     notices = ROOT / "dist" / "THIRD-PARTY-LICENSES"
     notices.mkdir(exist_ok=True)
@@ -65,7 +71,8 @@ def main():
                     sha256=hashlib.sha256(setup.read_bytes()).hexdigest(),
                     source_commit=subprocess.check_output(["git", "rev-parse", "HEAD"], cwd=ROOT, text=True).strip(),
                     source_dirty=bool(subprocess.check_output(["git", "status", "--porcelain", "--untracked-files=no"], cwd=ROOT, text=True)),
-                    mode="measurement-only Windows service", signed=False)
+                    mode="measurement-only Windows service", signed=False,
+                    desktop_dpi_awareness="PerMonitorV2")
     (ROOT / "dist" / "build-manifest.json").write_text(json.dumps(manifest, indent=2) + "\n", encoding="utf-8")
     (ROOT / "dist" / "SHA256SUMS.txt").write_text(f"{manifest['sha256']}  {setup.name}\n", encoding="utf-8")
     print(json.dumps(manifest, indent=2))
