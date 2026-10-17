@@ -30,7 +30,14 @@ jobs:
         run: python build.py --iscc "$env:NETTIME_ISCC"
       - name: Test installed service lifecycle
         shell: pwsh
-        run: ./scripts/Test-InstalledBuild.ps1 -Installer ./dist/NetTimeNext-0.2.0-Setup-x64.exe
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          $version = python -c "from runtime_paths import VERSION; print(VERSION)"
+          $previous = "$env:RUNNER_TEMP/nettime-previous"
+          gh release download v0.2.0 --repo "$env:GITHUB_REPOSITORY" --pattern 'NetTimeNext-0.2.0-Setup-x64.exe' --dir $previous
+          if ($LASTEXITCODE -ne 0) { throw 'Previous installer download failed' }
+          ./scripts/Test-InstalledBuild.ps1 -Installer "./dist/NetTimeNext-$version-Setup-x64.exe" -PreviousInstaller "$previous/NetTimeNext-0.2.0-Setup-x64.exe"
       - uses: actions/upload-artifact@v4
         with:
           name: NetTimeNext-Windows-x64

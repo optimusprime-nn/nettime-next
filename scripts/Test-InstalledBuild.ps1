@@ -1,5 +1,6 @@
 param(
   [Parameter(Mandatory=$true)][string]$Installer,
+  [string]$PreviousInstaller,
   [string]$ConfigPath,
   [switch]$KeepInstalled
 )
@@ -18,13 +19,14 @@ if ($ConfigPath) {
     '{"servers":[{"host":"test.invalid","port":123,"security":"nts_required"}],"poll_seconds":64,"timeout_seconds":1,"retention_days":7,"max_distance_ms":1000}' | Set-Content -LiteralPath $configFile -Encoding utf8
 }
 $setupPath = [System.IO.Path]::GetFullPath($Installer)
+$initialSetupPath = if ($PreviousInstaller) { [System.IO.Path]::GetFullPath($PreviousInstaller) } else { $setupPath }
 $appRoot = Join-Path $env:ProgramFiles 'NetTime Next'
 $helper = Join-Path $appRoot 'Service\NetTimeNextService.exe'
 $logPath = Join-Path (Split-Path $setupPath) 'installer-test.log'
 $startedUtc = [DateTimeOffset]::UtcNow.ToUnixTimeSeconds()
 $keep = $false
 try {
-    $process = Start-Process -FilePath $setupPath -ArgumentList @('/VERYSILENT','/SUPPRESSMSGBOXES','/NORESTART',"/LOG=`"$logPath`"") -WindowStyle Hidden -Wait -PassThru
+    $process = Start-Process -FilePath $initialSetupPath -ArgumentList @('/VERYSILENT','/SUPPRESSMSGBOXES','/NORESTART',"/LOG=`"$logPath`"") -WindowStyle Hidden -Wait -PassThru
     if ($process.ExitCode -ne 0) { throw "Installer failed ($($process.ExitCode)); see $logPath" }
     $svc = Get-Service -Name $serviceName
     $svc.WaitForStatus('Running', [TimeSpan]::FromSeconds(30))
@@ -36,6 +38,10 @@ try {
     }
     if (-not $health -or $health.latest_decision_utc -lt $startedUtc -or $health.servers -lt 1) { throw 'Service did not record a fresh measurement cycle.' }
     Write-Output ('Fresh service evidence: ' + ($health | ConvertTo-Json -Compress))
+    if (-not $PreviousInstaller) {
+        & python (Join-Path $PSScriptRoot 'Check-ServiceReader.py')
+        if ($LASTEXITCODE -ne 0) { throw 'Read-only user database/desktop regression check failed' }
+    }
     & $helper stop
     if ($LASTEXITCODE -ne 0) { throw 'Service stop failed' }
     (Get-Service -Name $serviceName).WaitForStatus('Stopped', [TimeSpan]::FromSeconds(30))
@@ -47,6 +53,10 @@ try {
     if ($upgrade.ExitCode -ne 0) { throw 'Upgrade/reinstall failed' }
     (Get-Service -Name $serviceName).WaitForStatus('Running', [TimeSpan]::FromSeconds(30))
     if ((Get-FileHash -LiteralPath $configFile -Algorithm SHA256).Hash -ne $configHash) { throw 'Upgrade changed machine settings' }
+    $upgradedHealth = & $helper health | ConvertFrom-Json
+    if ($upgradedHealth.latest_decision_utc -lt $health.latest_decision_utc -or $upgradedHealth.servers -lt 1) { throw 'Upgrade lost existing measurement evidence' }
+    & python (Join-Path $PSScriptRoot 'Check-ServiceReader.py')
+    if ($LASTEXITCODE -ne 0) { throw 'Read-only user check failed after upgrade' }
     foreach ($old in $oldServices) {
         $current = Get-CimInstance Win32_Service -Filter "Name='$($old.Name)'"
         if ($current.State -ne $old.State -or $current.ProcessId -ne $old.ProcessId) {

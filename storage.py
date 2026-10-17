@@ -11,14 +11,21 @@ class Store:
     def __init__(self, path, retention_days=7, read_only=False):
         self.path = Path(path)
         self.read_only = read_only
+        self.retention_days = max(7, retention_days)
         if read_only:
             if not self.path.is_file():
                 raise FileNotFoundError("No service history yet. Install/start the NetTime Next Observer service first.")
             return
         self.path.parent.mkdir(parents=True, exist_ok=True)
-        self.retention_days = max(7, retention_days)
         with self.connect() as db:
-            db.execute("PRAGMA journal_mode=WAL")
+            # Read-only desktop users cannot create WAL/SHM sidecars in the
+            # service-owned directory. Rollback journaling supports true
+            # read-only clients without weakening the filesystem permissions.
+            # SQLite also checkpoints/migrates existing WAL databases here;
+            # the installer stops the old writer before this initialization.
+            mode = db.execute("PRAGMA journal_mode=DELETE").fetchone()[0]
+            if mode.lower() != "delete":
+                raise RuntimeError("Unable to prepare service history for read-only desktop access")
             db.executescript('''
                 CREATE TABLE IF NOT EXISTS samples (
                   id INTEGER PRIMARY KEY, cycle INTEGER, utc REAL, host TEXT,

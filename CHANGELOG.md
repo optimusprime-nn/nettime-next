@@ -1,5 +1,16 @@
 # Change history
 
+## 0.2.1 — Read-only database startup fix
+
+- Fix desktop startup failure when users have read-only access to the service's
+  history folder and SQLite WAL/SHM files are absent.
+- Migrate existing WAL history to rollback journaling during service upgrade,
+  preserving settings, measurements and selection evidence.
+- Build service-view state without instantiating a collector or running startup
+  queries. Database read errors remain recoverable in the status display.
+- Show one friendly startup error instead of a second unhandled-exception dialog.
+- Add restricted-token database and installed desktop regression checks.
+
 ## 0.2.0 — Windows service preview
 
 - Installable x64 Windows build with bundled runtimes and uninstaller.

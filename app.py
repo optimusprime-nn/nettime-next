@@ -10,10 +10,17 @@ import threading
 import time
 import sys
 from pathlib import Path
+from types import SimpleNamespace
 
 from monitor import BASE, InstanceLock, Monitor, load_config
 from storage import Store
 from runtime_paths import VERSION, machine_root
+from selection import Peer
+
+
+def view_state(cfg):
+    """A desktop service view has no collector and performs no startup SQL."""
+    return SimpleNamespace(peers=[Peer(s["host"], s["port"]) for s in cfg["servers"]])
 
 
 def utc(value):
@@ -90,7 +97,7 @@ def gui(cfg, store, smoke=False, config_path=BASE / "settings.json", service_vie
     status = tk.StringVar(value=f"Checking all sources every {cfg['poll_seconds']:g}s; server restrictions may extend this.")
     ttk.Label(footer, textvariable=status).pack(side="left")
     messages = queue.Queue()
-    monitor = Monitor(cfg, store, messages)
+    monitor = view_state(cfg) if service_view else Monitor(cfg, store, messages)
     worker = None
     last = {}
     closing = False
@@ -190,7 +197,7 @@ def gui(cfg, store, smoke=False, config_path=BASE / "settings.json", service_vie
             def saved():
                 nonlocal cfg, monitor, last, last_decision_id, next_service_read
                 cfg = load_config(config_path)
-                monitor = Monitor(cfg, store, messages)
+                monitor = view_state(cfg)
                 table.delete(*table.get_children())
                 for server in cfg["servers"]:
                     key = f"{server['host']}:{server['port']}"
@@ -330,7 +337,7 @@ def main():
             gui(cfg, store, args.smoke_ui, args.config)
 
 
-if __name__ == "__main__":
+def entrypoint():
     try:
         main()
     except Exception as exc:
@@ -338,4 +345,10 @@ if __name__ == "__main__":
         if not any(a in sys.argv for a in ("--once", "--headless", "--export", "--smoke-ui")):
             from tkinter import messagebox
             messagebox.showerror("NetTime Next", str(exc))
+            return 1
         raise
+    return 0
+
+
+if __name__ == "__main__":
+    sys.exit(entrypoint())
