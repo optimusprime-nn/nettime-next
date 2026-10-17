@@ -1,5 +1,7 @@
 {
   "servers": [
+    {"host": "192.0.2.54", "port": 123, "security": "plain_ntp"},
+    {"host": "192.0.2.62", "port": 123, "security": "plain_ntp"},
     {"host": "time-a-b.nist.gov", "port": 123, "security": "plain_ntp"},
     {"host": "time-b-b.nist.gov", "port": 123, "security": "plain_ntp"}
   ],

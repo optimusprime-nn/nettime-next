@@ -27,8 +27,20 @@ def main():
         raise SystemExit("Build Windows executables on Windows")
     if not args.skip_tests:
         run(sys.executable, "-m", "unittest", "discover", "-s", ".", "-p", "test_*.py", "-v")
+    version_file = ROOT / "build" / "windows-version.txt"
+    version_file.parent.mkdir(exist_ok=True)
+    components = tuple(int(v) for v in VERSION.split(".")) + (0,)
+    version_file.write_text(f'''VSVersionInfo(
+      ffi=FixedFileInfo(filevers={components}, prodvers={components}, mask=0x3f,
+        flags=0, OS=0x40004, fileType=1, subtype=0, date=(0,0)),
+      kids=[StringFileInfo([StringTable('040904B0', [
+        StringStruct('FileDescription', 'NetTime Next Observer'),
+        StringStruct('FileVersion', '{VERSION}.0'),
+        StringStruct('ProductName', 'NetTime Next'),
+        StringStruct('ProductVersion', '{VERSION}.0')])]),
+        VarFileInfo([VarStruct('Translation', [1033,1200])])])''', encoding="utf-8")
     common = [sys.executable, "-m", "PyInstaller", "--noconfirm", "--clean", "--noupx", "--onedir",
-              "--add-data", "settings.example.json;."]
+              "--add-data", "settings.example.json;.", "--version-file", str(version_file)]
     run(*common, "--name", "NetTimeNext", "--windowed", "app.py")
     run(*common, "--name", "NetTimeNextService", "--console", "service_host.py")
     notices = ROOT / "dist" / "THIRD-PARTY-LICENSES"
