@@ -1,5 +1,11 @@
 # Change history
 
+## 0.2.4 — Dark desktop appearance
+
+- Default dark appearance for the main window, settings, server tables, chart and decision evidence.
+- Light/Dark selector remembers a per-user choice independently of service configuration, without elevation or service restart.
+- Retains native high-DPI rendering from 0.2.3.
+
 ## 0.2.3 — Native high-DPI desktop rendering
 
 - Embed Per-Monitor V2 DPI awareness in the desktop executable so Windows does

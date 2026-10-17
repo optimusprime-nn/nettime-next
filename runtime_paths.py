@@ -3,7 +3,7 @@ import os
 import sys
 from pathlib import Path
 
-VERSION = "0.2.3"
+VERSION = "0.2.4"
 SERVICE_NAME = "NetTimeNext"
 SERVICE_DISPLAY_NAME = "NetTime Next Observer"
 RESOURCE_DIR = Path(getattr(sys, "_MEIPASS", Path(__file__).resolve().parent))

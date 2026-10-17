@@ -72,9 +72,28 @@ def gui(cfg, store, smoke=False, config_path=BASE / "settings.json", service_vie
     style.configure("Treeview.Heading", font=("Segoe UI", 10, "bold"), padding=7)
     style.configure("TButton", padding=(12, 7), font=("Segoe UI", 10))
 
+    from appearance import Appearance
+    appearance = Appearance(root)
+
     outer = ttk.Frame(root, padding=20)
     outer.pack(fill="both", expand=True)
-    ttk.Label(outer, text="NetTime Next", style="Title.TLabel").pack(anchor="w")
+    header = ttk.Frame(outer)
+    header.pack(fill="x")
+    ttk.Label(header, text="NetTime Next", style="Title.TLabel").pack(side="left")
+    theme_choice = tk.StringVar(value=appearance.theme)
+    theme_picker = ttk.Combobox(header, textvariable=theme_choice, values=("Dark", "Light"), state="readonly", width=8)
+    theme_picker.pack(side="right")
+    ttk.Label(header, text="Appearance ").pack(side="right")
+
+    def change_theme(event=None):
+        try:
+            appearance.change(theme_choice.get())
+            draw_history()
+        except OSError as exc:
+            theme_choice.set(appearance.theme)
+            messagebox.showerror("Appearance could not be saved", str(exc), parent=root)
+
+    theme_picker.bind("<<ComboboxSelected>>", change_theme)
     ttk.Label(outer, text="MEASUREMENT ONLY  ·  Existing NetTime controls your clock  ·  " +
               ("Windows service collects while this window is closed" if service_view else "Seven-day rolling evidence")).pack(anchor="w", pady=(4, 16))
     summary = tk.StringVar(value="Waiting for measurements from every configured server…")
@@ -159,11 +178,12 @@ def gui(cfg, store, smoke=False, config_path=BASE / "settings.json", service_vie
         else:
             statistics.set("No measurements stored yet. Seven days of history accumulate while the observer runs.")
         canvas.delete("all")
+        colors = appearance.palette
         px = dpi_layout.px
         width, height = max(canvas.winfo_width(), px(300)), max(canvas.winfo_height(), px(70))
         valid = [r for r in rows if r[4] == "valid" and r[1] is not None]
         if not valid:
-            canvas.create_text(width / 2, height / 2, text="No valid time measurements yet", fill="#68758a")
+            canvas.create_text(width / 2, height / 2, text="No valid time measurements yet", fill=colors["muted"])
             return
         xmin, xmax = rows[0][0], max(rows[-1][0], rows[0][0] + 1)
         ymin = min(r[1] for r in valid)
@@ -171,14 +191,14 @@ def gui(cfg, store, smoke=False, config_path=BASE / "settings.json", service_vie
         margin = max((ymax - ymin) * 0.15, 0.05)
         ymin, ymax = ymin - margin, ymax + margin
         left, right, top, bottom = px(80), width - px(25), px(25), height - px(40)
-        canvas.create_line(left, top, left, bottom, right, bottom, fill="#a9b5c8")
+        canvas.create_line(left, top, left, bottom, right, bottom, fill=colors["border"])
         for fraction in (0, .5, 1):
             value = ymin + (ymax - ymin) * fraction
             y = bottom - (bottom - top) * fraction
-            canvas.create_line(left, y, right, y, fill="#e8ecf3")
-            canvas.create_text(left - px(8), y, anchor="e", text=f"{value:+.3f}", fill="#52627b")
-        canvas.create_text(left, height - px(16), anchor="w", text=utc(xmin), fill="#52627b")
-        canvas.create_text(right, height - px(16), anchor="e", text=utc(xmax), fill="#52627b")
+            canvas.create_line(left, y, right, y, fill=colors["grid"])
+            canvas.create_text(left - px(8), y, anchor="e", text=f"{value:+.3f}", fill=colors["muted"])
+        canvas.create_text(left, height - px(16), anchor="w", text=utc(xmin), fill=colors["muted"])
+        canvas.create_text(right, height - px(16), anchor="e", text=utc(xmax), fill=colors["muted"])
         previous = None
         for stamp, offset, delay, stratum, sample_status in rows:
             if sample_status != "valid" or offset is None:
@@ -187,8 +207,8 @@ def gui(cfg, store, smoke=False, config_path=BASE / "settings.json", service_vie
             x = left + (stamp - xmin) / (xmax - xmin) * (right - left)
             y = bottom - (offset - ymin) / (ymax - ymin) * (bottom - top)
             if previous and 0 < stamp - previous[2] <= 3 * cfg["poll_seconds"]:
-                canvas.create_line(previous[0], previous[1], x, y, fill="#2864c5", width=px(2))
-            canvas.create_oval(x - px(2), y - px(2), x + px(2), y + px(2), fill="#2864c5", outline="")
+                canvas.create_line(previous[0], previous[1], x, y, fill=colors["accent"], width=px(2))
+            canvas.create_oval(x - px(2), y - px(2), x + px(2), y + px(2), fill=colors["accent"], outline="")
             previous = x, y, stamp
 
     def export():
@@ -323,6 +343,7 @@ def gui(cfg, store, smoke=False, config_path=BASE / "settings.json", service_vie
     # when high-DPI fonts and explanatory text need more vertical space.
     footer.pack_configure(side="bottom", before=tabs)
     dpi_layout.apply()
+    appearance.apply()
     root.after(500, dpi_layout.watch)
     if smoke:
         root.after(300, root.destroy)

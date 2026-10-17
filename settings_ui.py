@@ -51,7 +51,7 @@ def show_settings(parent, cfg, config_path, store, on_save, save_handler=None):
     ttk.Combobox(edit, textvariable=mode, state="readonly", width=38,
                  values=("Plain NTP · unauthenticated", "NTS required · blocked until supported")).grid(row=1, column=2, sticky="ew")
     ttk.Label(servers, text="NTS required is a fail-closed reservation in this observer: it sends no packets to that entry.\nNTS key exchange and authenticated packets are not implemented yet.",
-              wraplength=860, foreground="#925424").pack(anchor="w")
+              wraplength=860, style="Warning.TLabel").pack(anchor="w")
 
     def refresh():
         listing.delete(*listing.get_children())
@@ -167,4 +167,7 @@ def show_settings(parent, cfg, config_path, store, on_save, save_handler=None):
     ttk.Button(footer, text="Cancel", command=window.destroy).pack(side="right")
     if dpi_layout:
         dpi_layout.apply()
+    appearance = getattr(parent, "_nettime_appearance", None)
+    if appearance:
+        appearance.apply(window)
     return window
