@@ -68,13 +68,15 @@ class Monitor:
         self.stop = threading.Event()
         self.peers = [Peer(s["host"], s["port"], interval=cfg["poll_seconds"]) for s in cfg["servers"]]
         self.cycle = store.next_cycle()
-        self.previous = None
+        _, previous = store.latest_decision()
+        self.previous = previous["selected"] if previous else None
         self.last_wall, self.last_mono = utc_now(), time.perf_counter()
         self.next_prune = self.last_mono + 3600
         for peer in self.peers:
             state = store.load_state().get(peer.key, {})
             peer.interval = max(cfg["poll_seconds"], state.get("interval", 0))
             peer.disabled = state.get("disabled", "")
+            peer.reach = state.get("reach", 0)
             # Honor minimum time between requests even across process restarts.
             peer.next_due = self.last_mono + max(0, state.get("next_utc", 0) - self.last_wall)
 
@@ -143,7 +145,7 @@ class Monitor:
         decision["previous_selected"] = self.previous
         decision["selection_changed"] = decision["selected"] != self.previous
         decision["utc"] = wall
-        state = {p.key: dict(interval=p.interval, disabled=p.disabled,
+        state = {p.key: dict(interval=p.interval, disabled=p.disabled, reach=p.reach,
                  next_utc=wall + max(0, p.next_due - now)) for p in self.peers}
         self.store.save_cycle(self.cycle, samples, decision, state, wall)
         self.previous = decision["selected"]
@@ -151,7 +153,7 @@ class Monitor:
         self.messages.put(("cycle", decision))
         return decision
 
-    def run(self):
+    def run(self, raise_errors=False):
         try:
             self.store.event("monitor_started", {"config": self.cfg, "policy": POLICY,
                 "mode": "read-only; existing NetTime controls PC clock",
@@ -165,6 +167,8 @@ class Monitor:
                 self.stop.wait(0.5)
         except Exception as exc:
             self.messages.put(("error", f"Monitoring stopped: {exc}"))
+            if raise_errors:
+                raise
         finally:
             try:
                 self.store.event("monitor_stopped", {"reason": "stop requested" if self.stop.is_set() else "error"})

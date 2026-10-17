@@ -1,19 +1,37 @@
-# NetTime Next — all-source observer
+# NetTime Next — Windows service preview 0.2.0
 
 This first working build monitors every configured time source while the existing
 NetTime service continues controlling the PC clock. It cannot change the clock.
 It is **not yet a complete RFC 5905 synchronization engine**, and **NTS is not
 implemented**. Its source recommendation is explicitly experimental.
 
-## Open the application
+## Install the Windows build
+
+Run `NetTimeNext-0.2.0-Setup-x64.exe` and approve Windows elevation. Python does
+not need to be installed on the destination computer. The installer adds the
+automatically starting **NetTime Next Observer** Windows service and a desktop
+app accessible from the Start menu. The original NetTime service is not changed.
+
+The service collects while the window is closed and users are logged out.
+The desktop reads its history without starting another collector. Configuration
+and history are stored in `ProgramData\NetTimeNext`; upgrades and uninstall
+preserve them. The service runs as LocalService with access restricted to its
+own writable data directory. Saving service settings requests administrator
+approval and restarts the observer service. This preview installer is unsigned.
+
+See [Windows service deployment and build details](docs/WINDOWS-SERVICE.md).
+
+## Run from source
 
 Double-click **Launch NetTime Next.cmd**. Python 3.11 with Tk is already present
 on this machine; no additional packages are required. Keep the application open
-to accumulate history. Closing it stops collection. No startup task or Windows
-service is installed. The launcher currently uses this machine's Python path,
-with `python` as a fallback.
+to accumulate history in standalone source mode. Closing a **standalone** window
+stops its collector; closing the **installed service** window does not. The
+development launcher uses this machine's Python path with `python` as a fallback.
+On another development machine, copy `settings.example.json` to `settings.json`
+and run `python app.py`. Live settings/logs are excluded from Git.
 
-The initial server list matches the supplied screenshots:
+The local development settings match the supplied screenshots:
 
 - `192.0.2.54:123`
 - `192.0.2.62:123`
@@ -38,7 +56,8 @@ adding requires **Add server**, followed by **Save for restart**.
   entry from sending requests. It does not emulate authentication or fall back.
 - The NTS page describes the missing RFC 8915 implementation, including TLS key
   establishment and authenticated NTP packets. Server support is not assumed.
-- Clock correction is informational and disabled in this observer.
+- Clock correction is informational and disabled in this observer, including
+  when it runs as a Windows service.
 - Retention defaults to seven days and cannot be set below seven.
 
 ## Measurements and evidence
@@ -54,7 +73,8 @@ not establish the PC's natural oscillator drift. A reference ID is the server's
 advertised identifier, not necessarily a usable upstream hostname. LI values 1/2
 announce leap events; LI 3 reports an unsynchronized server.
 
-`data/history.sqlite3` stores every attempt (including failures), parsed reply
+`ProgramData\NetTimeNext\data\history.sqlite3` in service mode, or local
+`data/history.sqlite3` in source mode, stores every attempt (including failures), parsed reply
 metadata and raw base-header request/reply bytes; timestamps T1–T4; resolved
 endpoint; stratum; security mode; offset and delay; root delay and dispersion;
 server control messages; diagnostic candidate metrics; all source reasons;
@@ -113,9 +133,14 @@ python app.py --export path-to-export-folder
 python -m unittest discover -s . -p "test_*.py" -v
 ```
 
+`python app.py --service-view` connects a source checkout to the installed
+service; this requires pywin32. Frozen desktop builds use service view by default.
+`--standalone` explicitly requests an independent development collector.
+
 `--once` honors persisted polling restrictions and can report that no checks are
 due. `--headless` collects continuously until stopped; it is not an installed
-background service. Use `--data-dir` for an alternative local database directory.
+background service. The installer provides the managed Windows service instead.
+Use `--data-dir` for an alternative standalone database directory.
 One collector may use a data directory at a time.
 
 ## Standards and next release gates
@@ -126,3 +151,11 @@ One collector may use a data directory at a time.
 - [RFC 8915 — NTS](https://www.rfc-editor.org/rfc/rfc8915.html)
 
 See `PRODUCT-REQUIREMENTS.md` for the agreed direction and acceptance gates.
+
+## Source history and builds
+
+Source is tracked in the private [nettime-next GitHub repository](https://github.com/Optimusprimeums/nettime-next).
+The Windows workflow runs tests, builds the installer and checks service
+installation, collection, stop/start, upgrade and uninstall. Build artifacts
+include a SHA-256 checksum and the source commit. NTS, full synchronization
+conformance and signed releases remain separately tracked issues.

@@ -8,10 +8,12 @@ import os
 import queue
 import threading
 import time
+import sys
 from pathlib import Path
 
 from monitor import BASE, InstanceLock, Monitor, load_config
 from storage import Store
+from runtime_paths import VERSION, machine_root
 
 
 def utc(value):
@@ -24,13 +26,13 @@ def number(value, signed=False):
     return f"{value:+.3f}" if signed else f"{value:.3f}"
 
 
-def gui(cfg, store, smoke=False, config_path=BASE / "settings.json"):
+def gui(cfg, store, smoke=False, config_path=BASE / "settings.json", service_view=False):
     import tkinter as tk
     from tkinter import filedialog, messagebox, ttk
     from tkinter.scrolledtext import ScrolledText
 
     root = tk.Tk()
-    root.title("NetTime Next · All-source observer")
+    root.title(f"NetTime Next {VERSION} · {'Windows service' if service_view else 'Standalone'} observer")
     root.geometry("1430x830")
     root.minsize(1060, 680)
     root.configure(bg="#f4f6fa")
@@ -46,7 +48,8 @@ def gui(cfg, store, smoke=False, config_path=BASE / "settings.json"):
     outer = ttk.Frame(root, padding=20)
     outer.pack(fill="both", expand=True)
     ttk.Label(outer, text="NetTime Next", style="Title.TLabel").pack(anchor="w")
-    ttk.Label(outer, text="MEASUREMENT ONLY  ·  Existing NetTime controls your clock  ·  Seven-day rolling evidence").pack(anchor="w", pady=(4, 16))
+    ttk.Label(outer, text="MEASUREMENT ONLY  ·  Existing NetTime controls your clock  ·  " +
+              ("Windows service collects while this window is closed" if service_view else "Seven-day rolling evidence")).pack(anchor="w", pady=(4, 16))
     summary = tk.StringVar(value="Waiting for measurements from every configured server…")
     ttk.Label(outer, textvariable=summary, wraplength=1240, font=("Segoe UI", 11, "bold")).pack(anchor="w")
     explanation = tk.StringVar(value="Recommendations are experimental; no system clock changes are made.")
@@ -91,6 +94,9 @@ def gui(cfg, store, smoke=False, config_path=BASE / "settings.json"):
     worker = None
     last = {}
     closing = False
+    last_decision_id = 0
+    next_service_read = 0
+    service_state = "unknown"
 
     def draw_history(event=None):
         selected = table.selection()
@@ -157,30 +163,72 @@ def gui(cfg, store, smoke=False, config_path=BASE / "settings.json"):
                 messagebox.showerror("Export failed", str(exc))
 
     def stop_monitor():
+        if service_view:
+            from service_client import elevated_command
+            try:
+                elevated_command("stop" if service_state == "running" else "start")
+                status.set("Service state changed; refreshing…")
+            except Exception as exc:
+                messagebox.showerror("Service change failed", str(exc))
+            return
         monitor.stop.set()
         status.set("Stopping after pending measurements finish…")
         stop_button.configure(state="disabled")
 
     def close():
         nonlocal closing
+        if service_view:
+            root.destroy()
+            return
         closing = True
         stop_monitor()
 
     def settings():
         from settings_ui import show_settings
-        show_settings(root, cfg, config_path, store, lambda: status.set("Settings saved. Close and reopen to apply; current monitor still uses previous settings."))
+        if service_view:
+            from service_client import save_service_config
+            def saved():
+                nonlocal cfg, monitor, last, last_decision_id, next_service_read
+                cfg = load_config(config_path)
+                monitor = Monitor(cfg, store, messages)
+                table.delete(*table.get_children())
+                for server in cfg["servers"]:
+                    key = f"{server['host']}:{server['port']}"
+                    table.insert("", "end", iid=key, values=(server["host"], "Waiting", *(["—"] * 9)))
+                last, last_decision_id, next_service_read = {}, 0, 0
+                table.selection_set(table.get_children()[0])
+                status.set("Service settings applied; waiting for fresh evidence.")
+            show_settings(root, load_config(config_path), config_path, store, saved, save_service_config)
+        else:
+            show_settings(root, cfg, config_path, store, lambda: status.set("Settings saved. Close and reopen to apply; current monitor still uses previous settings."))
 
     ttk.Button(footer, text="Settings…", command=settings).pack(side="right", padx=(8, 0))
     ttk.Button(footer, text="Export evidence…", command=export).pack(side="right", padx=(8, 0))
     ttk.Button(footer, text="Open data folder", command=lambda: os.startfile(str(store.path.parent))).pack(side="right", padx=(8, 0))
-    stop_button = ttk.Button(footer, text="Stop monitoring", command=stop_monitor)
+    stop_button = ttk.Button(footer, text="Stop service…" if service_view else "Stop monitoring", command=stop_monitor)
     stop_button.pack(side="right")
     table.bind("<<TreeviewSelect>>", draw_history)
     canvas.bind("<Configure>", draw_history)
     root.protocol("WM_DELETE_WINDOW", close)
 
     def tick():
-        nonlocal last
+        nonlocal last, last_decision_id, next_service_read, service_state
+        if service_view and time.perf_counter() >= next_service_read:
+            try:
+                from service_control import query_status
+                service_state = query_status()
+                stop_button.configure(text="Stop service…" if service_state == "running" else "Start service…")
+                current_id, payload = store.latest_decision()
+                if payload is not None and current_id != last_decision_id:
+                    last_decision_id = current_id
+                    messages.put(("cycle", payload))
+                elif last:
+                    status.set(f"Service: {service_state}  ·  Last evidence {utc(last['utc'])}  ·  Closing this window keeps collection running")
+                else:
+                    status.set(f"Service: {service_state}  ·  Waiting for the first measurement cycle")
+            except Exception as exc:
+                status.set(f"Service data unavailable: {exc}")
+            next_service_read = time.perf_counter() + 2
         try:
             while True:
                 kind, payload = messages.get_nowait()
@@ -193,6 +241,8 @@ def gui(cfg, store, smoke=False, config_path=BASE / "settings.json"):
                     details.insert("1.0", json.dumps(payload, indent=2))
                     details.configure(state="disabled")
                     for server in payload["servers"]:
+                        if not table.exists(server["peer"]):
+                            continue
                         s = server["latest"] or {}
                         c = next((c for c in payload["candidates"] if c["peer"] == server["peer"]), {})
                         tag = "selected" if payload["selected"] == server["peer"] else "failed" if s.get("status") != "valid" else ""
@@ -214,6 +264,12 @@ def gui(cfg, store, smoke=False, config_path=BASE / "settings.json"):
         except queue.Empty:
             pass
         for peer in monitor.peers:
+            if service_view:
+                snapshot = next((s for s in last.get("servers", []) if s["peer"] == peer.key), None)
+                next_utc = snapshot["next_check_utc"] if snapshot else None
+                table.set(peer.key, "next", "Stopped" if service_state != "running" else "Blocked" if snapshot and snapshot["disabled"] else
+                          f"{max(0, next_utc - time.time()):.0f}s" if next_utc else "Waiting")
+                continue
             if peer.disabled and peer.latest is None:
                 table.set(peer.key, "status", "Access refused")
             table.set(peer.key, "next", "Stopped" if monitor.stop.is_set() else "Blocked" if peer.disabled else
@@ -226,6 +282,8 @@ def gui(cfg, store, smoke=False, config_path=BASE / "settings.json"):
     table.selection_set(table.get_children()[0])
     if smoke:
         root.after(300, root.destroy)
+    elif service_view:
+        root.after(100, tick)
     else:
         worker = threading.Thread(target=monitor.run, name="ntp-observer", daemon=True)
         worker.start()
@@ -241,11 +299,21 @@ def main():
     parser.add_argument("--headless", action="store_true", help="Continuous foreground collector without GUI")
     parser.add_argument("--export", type=Path, metavar="FOLDER")
     parser.add_argument("--smoke-ui", action="store_true", help=argparse.SUPPRESS)
+    parser.add_argument("--service-view", action="store_true", help="Read the installed Windows service without starting another collector")
+    parser.add_argument("--standalone", action="store_true", help="Run an independent development collector")
+    parser.add_argument("--version", action="version", version=VERSION)
     args = parser.parse_args()
+    service_view = args.service_view or (getattr(sys, "frozen", False) and not args.standalone and not args.once and not args.headless)
+    if service_view:
+        args.config = machine_root() / "settings.json"
+        args.data_dir = machine_root() / "data"
     cfg = load_config(args.config)
-    store = Store(args.data_dir / "history.sqlite3", cfg["retention_days"])
+    store = Store(args.data_dir / "history.sqlite3", cfg["retention_days"], read_only=service_view)
     if args.export:
         print(store.export(args.export))
+        return
+    if service_view:
+        gui(cfg, store, args.smoke_ui, args.config, service_view=True)
         return
     with InstanceLock(args.data_dir / "monitor.lock"):
         if args.once:

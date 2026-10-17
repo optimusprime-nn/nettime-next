@@ -8,8 +8,13 @@ from pathlib import Path
 
 
 class Store:
-    def __init__(self, path, retention_days=7):
+    def __init__(self, path, retention_days=7, read_only=False):
         self.path = Path(path)
+        self.read_only = read_only
+        if read_only:
+            if not self.path.is_file():
+                raise FileNotFoundError("No service history yet. Install/start the NetTime Next Observer service first.")
+            return
         self.path.parent.mkdir(parents=True, exist_ok=True)
         self.retention_days = max(7, retention_days)
         with self.connect() as db:
@@ -33,9 +38,11 @@ class Store:
 
     @contextmanager
     def connect(self):
-        db = sqlite3.connect(self.path, timeout=10)
+        target = self.path.resolve().as_uri() + "?mode=ro" if self.read_only else self.path
+        db = sqlite3.connect(target, timeout=10, uri=self.read_only)
         try:
-            db.execute("PRAGMA synchronous=FULL")
+            if not self.read_only:
+                db.execute("PRAGMA synchronous=FULL")
             with db:
                 yield db
         finally:
@@ -67,6 +74,11 @@ class Store:
     def next_cycle(self):
         with self.connect() as db:
             return db.execute("SELECT COALESCE(MAX(cycle),0)+1 FROM decisions").fetchone()[0]
+
+    def latest_decision(self):
+        with self.connect() as db:
+            row = db.execute("SELECT id,payload FROM decisions ORDER BY id DESC LIMIT 1").fetchone()
+            return (row[0], json.loads(row[1])) if row else (0, None)
 
     def prune(self, now=None):
         cutoff = (time.time() if now is None else now) - self.retention_days * 86400

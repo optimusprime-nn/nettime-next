@@ -1,0 +1,41 @@
+name: Windows build and tests
+on:
+  push:
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  windows:
+    runs-on: windows-2022
+    timeout-minutes: 25
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+          architecture: x64
+          cache: pip
+          cache-dependency-path: requirements-build.txt
+      - name: Install pinned build dependencies
+        run: python -m pip install -r requirements-build.txt
+      - name: Install verified Inno Setup compiler
+        shell: pwsh
+        run: |
+          $compiler = & ./scripts/Get-InnoSetup.ps1 -Destination "$env:RUNNER_TEMP/nettime-inno"
+          "NETTIME_ISCC=$compiler" | Out-File -FilePath $env:GITHUB_ENV -Append
+      - name: Test and package installer
+        run: python build.py --iscc "$env:NETTIME_ISCC"
+      - name: Test installed service lifecycle
+        shell: pwsh
+        run: ./scripts/Test-InstalledBuild.ps1 -Installer ./dist/NetTimeNext-0.2.0-Setup-x64.exe
+      - uses: actions/upload-artifact@v4
+        with:
+          name: NetTimeNext-Windows-x64
+          path: |
+            dist/*Setup-x64.exe
+            dist/build-manifest.json
+            dist/SHA256SUMS.txt
+          if-no-files-found: error

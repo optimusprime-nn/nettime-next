@@ -57,8 +57,9 @@ and consequences. Keep software updates separate from time synchronization.
 
 The working observer includes the first five settings pages. NTS-required is
 explicitly blocked pending implementation; it is not an available NTS client.
-Current settings save for restart. Hot application, per-source test buttons and
-additional advanced/service controls are future work.
+Standalone settings save for restart. Installed service settings are applied
+through an elevated helper that restarts the observer. Per-source test buttons
+and additional advanced controls are future work.
 
 ## NTP compliance gate
 
@@ -100,6 +101,10 @@ settings, seven-day rolling SQLite evidence, CSV exports, history graph,
 explainable experimental recommendation, base-header validation, KoD controls,
 restart-persistent scheduling and single collector lock.
 
+Version 0.2.0 adds a bundled Windows installer, automatic Windows service,
+LocalService identity with restricted data permissions, read-only desktop service
+view, elevated settings application, upgrades/uninstall and Windows build CI.
+
 Not implemented: NTS exchange/authentication, full NTP mitigation/discipline,
-clock adjustment, installed Windows service, startup registration, local NTP
-serving, signed standalone installer and interoperability certification.
+clock adjustment, local NTP serving, digital signing and interoperability
+certification. The installable preview is measurement-only.

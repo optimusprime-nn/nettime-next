@@ -1,0 +1,22 @@
+[
+  {
+    "title": "Implement authenticated NTS client support (RFC 8915)",
+    "body": "The observer currently labels plain replies unauthenticated and blocks NTS-required entries. Implement NTS-KE over TLS with certificate/hostname validation, exporter key derivation and endpoint negotiation; authenticated NTP extension fields; replay/identifier checks; cookie lifecycle and renewal; and rate-limited recovery. NTS-required must fail closed with no silent plaintext fallback. Log security outcomes without secrets. Validate against independent NTS implementations and tampered/invalid packet fixtures. See PRODUCT-REQUIREMENTS.md."
+  },
+  {
+    "title": "Complete NTPv4 synchronization pipeline and conformance matrix",
+    "body": "The current minimum-delay/interval-overlap recommendation is diagnostic and does not constitute the full RFC 5905 mitigation/discipline pipeline. Implement the supported unicast profile end to end: associations, clock filter, selection, clustering, combine, leap/era handling, polling and clock discipline. Add a requirements-to-test matrix and interoperability with independent implementations. Keep every configured source monitored and record all eligibility/selection reasons. Do not claim full conformance before the matrix and interoperability tests pass."
+  },
+  {
+    "title": "Add controlled clock correction and explicit takeover from existing time controller",
+    "body": "The service preview is intentionally read-only while the existing NetTime controls the PC clock. Implement a concrete takeover flow detecting NetTime/W32Time/other controllers; gradual correction and bounded stepping policies; privilege minimization; holdover limits; and verification/audit of actual versus requested corrections. Prevent competing correction loops. Preserve measurement-only mode. Block enablement until NTP/NTS validation gates are met."
+  },
+  {
+    "title": "Validate seven-day endurance, recovery and source-selection history",
+    "body": "Run a full week of service collection across all configured sources. Verify retention, database growth, exports, source-quality trends and reasons, stratum changes, local clock steps, network transitions, suspend/resume, process crashes and reboot/autostart. Verify desktop close/logout does not interrupt collection and ordinary users cannot modify machine settings/data. Unit/lifecycle checks are not a substitute for this endurance run."
+  },
+  {
+    "title": "Sign Windows builds and establish release/update verification",
+    "body": "The initial installer is an unsigned preview. Establish application/installer Authenticode signing, protected signing credentials, provenance and verified release/update checks. Add a documented release checklist covering licensing, supported Windows versions, service account/ACL checks, upgrade rollback and clean-machine installation. Keep unsigned preview builds clearly identified until signing is available."
+  }
+]

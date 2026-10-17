@@ -6,7 +6,7 @@ from pathlib import Path
 from monitor import validate_config
 
 
-def show_settings(parent, cfg, config_path, store, on_save):
+def show_settings(parent, cfg, config_path, store, on_save, save_handler=None):
     import tkinter as tk
     from tkinter import messagebox, ttk
 
@@ -20,7 +20,8 @@ def show_settings(parent, cfg, config_path, store, on_save):
     body = ttk.Frame(window, padding=20)
     body.pack(fill="both", expand=True)
     ttk.Label(body, text="Settings", font=("Segoe UI", 20, "bold")).pack(anchor="w")
-    ttk.Label(body, text="Applies after reopening the observer. NetTime remains responsible for the PC clock.").pack(anchor="w", pady=(4, 14))
+    ttk.Label(body, text="Saving restarts the observer service and needs administrator approval." if save_handler else
+              "Applies after reopening the observer. NetTime remains responsible for the PC clock.").pack(anchor="w", pady=(4, 14))
     notebook = ttk.Notebook(body)
     notebook.pack(fill="both", expand=True)
     pages = {}
@@ -123,7 +124,7 @@ def show_settings(parent, cfg, config_path, store, on_save):
 
     clock = pages["Clock correction"]
     ttk.Label(clock, text="Measurement only", font=("Segoe UI", 13, "bold")).pack(anchor="w")
-    ttk.Label(clock, text="The current NetTime service continues controlling your clock. This observer has no clock-setting capability, installs no service and opens no NTP server port.", wraplength=850).pack(anchor="w", pady=12)
+    ttk.Label(clock, text="The current NetTime service continues controlling your clock. NetTime Next's observer service collects measurements only and opens no NTP server port.", wraplength=850).pack(anchor="w", pady=12)
     ttk.Label(clock, text="For the synchronization release", font=("Segoe UI", 11, "bold")).pack(anchor="w", pady=(12, 8))
     ttk.Label(clock, text="• Explicit takeover from the existing clock controller\n• Gradual correction for small errors; defined handling of large steps\n• Maximum correction and holdover limits with units and clear actions\n• Full NTP mitigation and discipline validation before enabling correction\n• Separate local-server settings, disabled by default", wraplength=850).pack(anchor="w")
 
@@ -142,6 +143,11 @@ def show_settings(parent, cfg, config_path, store, on_save):
             for key, value in fields.items():
                 draft[key] = float(value.get())
             validate_config(draft)
+            if save_handler:
+                save_handler(draft)
+                on_save()
+                window.destroy()
+                return
             path = Path(config_path)
             temp = path.with_suffix(".json.tmp")
             temp.write_text(json.dumps(draft, indent=2) + "\n", encoding="utf-8")
@@ -153,6 +159,6 @@ def show_settings(parent, cfg, config_path, store, on_save):
             messagebox.showerror("Settings could not be saved", str(exc), parent=window)
 
     ttk.Label(footer, text="No clock-control settings are applied to the running NetTime service.").pack(side="left")
-    ttk.Button(footer, text="Save for restart", command=save).pack(side="right", padx=(8, 0))
+    ttk.Button(footer, text="Save & restart service…" if save_handler else "Save for restart", command=save).pack(side="right", padx=(8, 0))
     ttk.Button(footer, text="Cancel", command=window.destroy).pack(side="right")
     return window
