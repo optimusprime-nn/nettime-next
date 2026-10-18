@@ -117,7 +117,13 @@ pub fn run(database: PathBuf, config_path: PathBuf, smoke: bool, screen: String)
                     .build()
                     .ok()
             });
-            let cfg = Config::load(&config_path).unwrap_or_default();
+            let (cfg, configuration_error) = match Config::load(&config_path) {
+                Ok(cfg) => (cfg, String::new()),
+                Err(error) => (
+                    Config::default(),
+                    format!("Settings could not be loaded: {error:#}"),
+                ),
+            };
             let report = if smoke && screen == "comparison" {
                 Store::open(&database, true)
                     .and_then(|s| comparison::build(&s, 7., crate::protocol::utc()))
@@ -148,7 +154,7 @@ pub fn run(database: PathBuf, config_path: PathBuf, smoke: bool, screen: String)
                 report_days: 7.,
                 report_worker: None,
                 operation: None,
-                message: String::new(),
+                message: configuration_error,
                 report_peer: String::new(),
             }))
         }),

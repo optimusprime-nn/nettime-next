@@ -10,8 +10,10 @@ Version 0.3.1 had a reversed Windows precise-frequency conversion, discovered by
 longer live measurement. The original clock services were restored. Version
 0.3.2 corrects the conversion and adds measured wall-clock response testing;
 readback alone is not evidence of convergence. See
-[the regression report](docs/CLOCK-RESPONSE-REGRESSION.md). The Rust migration
-preview is separate and does not adjust the clock.
+[the regression report](docs/CLOCK-RESPONSE-REGRESSION.md). The separate
+[Rust preview](native/README.md) now includes native clock takeover/rollback,
+service settings administration and comparison reports. Its installation still
+defaults to observation; takeover requires a separate administrator action.
 
 ## Install and upgrade
 

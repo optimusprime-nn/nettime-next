@@ -9,9 +9,11 @@ use std::{
 #[serde(default)]
 pub struct Server {
     pub host: String,
+    #[serde(deserialize_with = "port_number")]
     pub port: u16,
     pub security: String,
     pub source_group: String,
+    #[serde(deserialize_with = "port_number")]
     pub nts_ke_port: u16,
 }
 impl Default for Server {
@@ -35,6 +37,7 @@ impl Server {
 pub struct Clock {
     pub mode: String,
     pub require_nts: bool,
+    #[serde(deserialize_with = "source_count")]
     pub min_sources: usize,
     pub max_offset_ms: f64,
     pub max_slew_ppm: f64,
@@ -131,4 +134,50 @@ impl Config {
 pub fn machine_root() -> PathBuf {
     PathBuf::from(std::env::var_os("ProgramData").unwrap_or_else(|| "C:\\ProgramData".into()))
         .join("NetTimeNext")
+}
+
+fn whole_number<'de, D: serde::Deserializer<'de>>(d: D) -> std::result::Result<u64, D::Error> {
+    let number = serde_json::Number::deserialize(d)?;
+    if let Some(value) = number.as_u64() {
+        return Ok(value);
+    }
+    let value = number
+        .as_f64()
+        .ok_or_else(|| serde::de::Error::custom("Expected a whole number"))?;
+    if value.is_finite() && value >= 0. && value <= 65535. && value.fract() == 0. {
+        Ok(value as u64)
+    } else {
+        Err(serde::de::Error::custom(
+            "Expected a nonnegative whole number",
+        ))
+    }
+}
+fn port_number<'de, D: serde::Deserializer<'de>>(d: D) -> std::result::Result<u16, D::Error> {
+    u16::try_from(whole_number(d)?).map_err(serde::de::Error::custom)
+}
+fn source_count<'de, D: serde::Deserializer<'de>>(d: D) -> std::result::Result<usize, D::Error> {
+    usize::try_from(whole_number(d)?).map_err(serde::de::Error::custom)
+}
+#[cfg(test)]
+mod tests {
+    use super::*;
+    #[test]
+    fn imports_legacy_integral_float_counts_and_ports_without_rounding() {
+        let mut cfg:Config=serde_json::from_str(r#"{"servers":[{"host":"ntp.invalid","port":123.0,"nts_ke_port":4460.0}],"clock":{"min_sources":3.0}}"#).unwrap();
+        cfg.validate().unwrap();
+        assert_eq!(cfg.clock.min_sources, 3);
+        assert_eq!(cfg.servers[0].port, 123);
+        for value in ["3.5", "-1", "true", "\"3\""] {
+            assert!(
+                serde_json::from_str::<Config>(&format!(
+                    r#"{{"clock":{{"min_sources":{value}}}}}"#
+                ))
+                .is_err()
+            );
+        }
+        assert!(
+            serde_json::from_str::<Config>(r#"{"servers":[{"host":"ntp.invalid","port":65536}]}"#)
+                .is_err()
+        );
+    }
 }
