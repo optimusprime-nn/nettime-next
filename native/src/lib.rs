@@ -1,11 +1,17 @@
+mod admin;
+mod clock;
+mod comparison;
 pub mod config;
 mod desktop;
 mod monitor;
 mod nts;
+mod ownership;
 pub mod protocol;
 pub mod selection;
 mod service;
 mod storage;
+mod validation;
+mod windows;
 use anyhow::{Result, ensure};
 use std::{
     path::PathBuf,
@@ -13,27 +19,40 @@ use std::{
 };
 pub fn run() -> Result<()> {
     let args: Vec<String> = std::env::args().skip(1).collect();
+    if args.first().map(String::as_str) == Some("--ci-clock-response") {
+        ensure!(args.len() == 2, "Supply a clock-response output file");
+        return validation::clock_response(std::path::Path::new(&args[1]));
+    }
+    if admin::dispatch(&args)? {
+        return Ok(());
+    }
     if args.iter().any(|a| a == "--version") {
         println!("{}", env!("CARGO_PKG_VERSION"));
         return Ok(());
     }
     if args.iter().any(|a| a == "--help") {
         println!(
-            "NetTime Next Rust migration\n\nDesktop: no options (reads current service history)\n--config FILE --database FILE\n--once / --headless: native collector; requires --config and --data-dir\n--export FOLDER: export history\n--service: Windows migration service dispatcher\n--install-service / --start-service / --stop-service / --remove-service / --status-service\n\nMigration collectors never adjust the clock or change the active service."
+            "NetTime Next Native\n\nDesktop: native service history when installed, otherwise current NetTime Next history\n--config FILE --database FILE\n--once / --headless: observation only; requires --config and separate --data-dir\n--export FOLDER: export full evidence\n--compare-export FOLDER --days DAYS: export windowed CSV/JSON report\n--service: Windows service dispatcher\n--install-service / --start-service / --stop-service / --remove-service / --status-service\n--apply-config FILE / --import-settings / --takeover / --rollback: explicit administrator actions\n--health: current native service and ownership evidence\n\nOnly the authorized Windows service can control the clock. Install and settings apply default to observation."
         );
         return Ok(());
     }
     if args.iter().any(|a| a == "--service") {
         return service::dispatch();
     }
-    if args.iter().any(|a| a == "--install-service") {
-        return service::install();
+    if args.iter().any(|a| a == "--health") {
+        use ownership::Services;
+        let cfg = config::Config::load(&service::root().join("settings.json"))?;
+        let decision =
+            storage::Store::open(&service::root().join("data/history.sqlite3"), true)?.latest()?;
+        println!(
+            "{}",
+            serde_json::json!({"version":env!("CARGO_PKG_VERSION"),"service":ownership::WindowsServices.snapshot(service::NAME)?,"mode":cfg.clock.mode,"ownership":ownership::journal(&service::root())?,"clock_privilege":ownership::WindowsServices.privilege(None).ok(),"latest":decision})
+        );
+        return Ok(());
     }
-    for action in ["start", "stop", "remove", "status"] {
-        if args.iter().any(|a| a == &format!("--{action}-service")) {
-            println!("{}", service::action(action)?);
-            return Ok(());
-        }
+    if args.iter().any(|a| a == "--status-service") {
+        println!("{}", service::action("status")?);
+        return Ok(());
     }
     let value = |key: &str| -> Result<Option<PathBuf>> {
         if let Some(i) = args.iter().position(|a| a == key) {
@@ -43,7 +62,14 @@ pub fn run() -> Result<()> {
             Ok(None)
         }
     };
-    let config = value("--config")?.unwrap_or_else(|| config::machine_root().join("settings.json"));
+    let config = value("--config")?.unwrap_or_else(|| {
+        let native = service::root().join("settings.json");
+        if native.exists() {
+            native
+        } else {
+            config::machine_root().join("settings.json")
+        }
+    });
     let collector = args.iter().any(|a| a == "--once" || a == "--headless");
     let data = value("--data-dir")?;
     if collector {
@@ -53,21 +79,45 @@ pub fn run() -> Result<()> {
         );
     }
     let database = value("--database")?.unwrap_or_else(|| {
-        data.unwrap_or_else(|| config::machine_root().join("data"))
-            .join("history.sqlite3")
+        data.unwrap_or_else(|| {
+            config
+                .parent()
+                .unwrap_or(&config::machine_root())
+                .join("data")
+        })
+        .join("history.sqlite3")
     });
     if let Some(folder) = value("--export")? {
         return storage::Store::open(&database, true)?.export(&folder);
     }
+    if let Some(folder) = value("--compare-export")? {
+        let days = if let Some(i) = args.iter().position(|a| a == "--days") {
+            args.get(i + 1)
+                .ok_or_else(|| anyhow::anyhow!("Missing --days value"))?
+                .parse::<f64>()?
+        } else {
+            7.
+        };
+        let report = comparison::build(
+            &storage::Store::open(&database, true)?,
+            days,
+            protocol::utc(),
+        )?;
+        return comparison::export(&report, &folder);
+    }
     if collector {
         let cfg = config::Config::load(&config)?;
-        let active = config::machine_root().join("data/history.sqlite3");
-        if database.exists() {
-            ensure!(
-                std::fs::canonicalize(&database)?
-                    != std::fs::canonicalize(&active).unwrap_or(active),
-                "Native collector must use a separate database"
-            );
+        for active in [
+            config::machine_root().join("data/history.sqlite3"),
+            service::root().join("data/history.sqlite3"),
+        ] {
+            if database.exists() {
+                ensure!(
+                    std::fs::canonicalize(&database)?
+                        != std::fs::canonicalize(&active).unwrap_or(active),
+                    "Native collector must use a separate database"
+                );
+            }
         }
         let mut monitor = monitor::Monitor::new(cfg, storage::Store::open(&database, false)?)?;
         if args.iter().any(|a| a == "--once") {
@@ -77,6 +127,20 @@ pub fn run() -> Result<()> {
             monitor.run(Arc::new(AtomicBool::new(false)))
         }
     } else {
-        desktop::run(database, config, args.iter().any(|a| a == "--smoke-ui"))
+        desktop::run(
+            database,
+            config,
+            args.iter().any(|a| {
+                ["--smoke-ui", "--smoke-settings", "--smoke-comparison"].contains(&a.as_str())
+            }),
+            if args.iter().any(|a| a == "--smoke-settings") {
+                "settings"
+            } else if args.iter().any(|a| a == "--smoke-comparison") {
+                "comparison"
+            } else {
+                "live"
+            }
+            .into(),
+        )
     }
 }

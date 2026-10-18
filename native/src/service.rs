@@ -1,4 +1,4 @@
-//! Separate migration service. Never changes the active NetTimeNext service or clock rights.
+//! Native SCM host. Clock control requires a separate durable ownership transaction.
 use crate::{config::Config, monitor::Monitor, storage::Store};
 use anyhow::Result;
 use std::{
@@ -12,7 +12,8 @@ use std::{
 use windows_service::{
     define_windows_service,
     service::{
-        ServiceAccess, ServiceControl, ServiceControlAccept, ServiceErrorControl, ServiceExitCode,
+        ServiceAccess, ServiceAction, ServiceActionType, ServiceControl, ServiceControlAccept,
+        ServiceErrorControl, ServiceExitCode, ServiceFailureActions, ServiceFailureResetPeriod,
         ServiceInfo, ServiceStartType, ServiceState, ServiceStatus, ServiceType,
     },
     service_control_handler::{self, ServiceControlHandlerResult},
@@ -59,15 +60,22 @@ fn service_main(_args: Vec<OsString>) {
     };
     let result = (|| -> Result<()> {
         handle.set_service_status(status(ServiceState::StartPending, 0))?;
+        // A crashed process cannot run Drop. On SCM recovery, clear its former
+        // rate before parsing configuration, but only with verified ownership.
+        if crate::ownership::guard(&root(), &mut crate::ownership::WindowsServices).unwrap_or(false)
+        {
+            use crate::clock::Backend;
+            crate::clock::WindowsClock::new()?.restore()?;
+        }
         let cfg = Config::load(&root().join("settings.json"))?;
         let store = Store::open(&root().join("data/history.sqlite3"), false)?;
-        let mut monitor = Monitor::new(cfg, store)?;
+        let mut monitor = Monitor::for_service(cfg, store, &root())?;
         handle.set_service_status(status(ServiceState::Running, 0))?;
         monitor.run(stop)
     })();
     if let Err(e) = &result {
         let _ = std::fs::write(
-            root().join("service-error.log"),
+            root().join("data/service-error.log"),
             format!("{} {e:#}", crate::protocol::utc()),
         );
     }
@@ -77,15 +85,20 @@ fn service_main(_args: Vec<OsString>) {
     ));
 }
 pub fn install() -> Result<()> {
+    crate::windows::require_admin()?;
+    anyhow::ensure!(
+        crate::ownership::journal(&root())?.is_none_or(|j| j.phase == "rolled_back"),
+        "Restore previous clocks before upgrading the native service"
+    );
     let manager = ServiceManager::local_computer(
         None::<&str>,
         ServiceManagerAccess::CONNECT | ServiceManagerAccess::CREATE_SERVICE,
     )?;
     let info = ServiceInfo {
         name: NAME.into(),
-        display_name: "NetTime Next Rust Migration Observer".into(),
+        display_name: "NetTime Next Native".into(),
         service_type: ServiceType::OWN_PROCESS,
-        start_type: ServiceStartType::OnDemand,
+        start_type: ServiceStartType::AutoStart,
         error_control: ServiceErrorControl::Normal,
         executable_path: std::env::current_exe()?.with_file_name("NetTimeNextNativeService.exe"),
         launch_arguments: vec!["--service".into()],
@@ -93,19 +106,47 @@ pub fn install() -> Result<()> {
         account_name: Some("NT AUTHORITY\\LocalService".into()),
         account_password: None,
     };
-    let service = match manager.open_service(NAME, ServiceAccess::CHANGE_CONFIG) {
-        Ok(service) => {
-            service.change_config(&info)?;
-            service
-        }
-        Err(windows_service::Error::Winapi(e)) if e.raw_os_error() == Some(1060) => {
-            manager.create_service(&info, ServiceAccess::CHANGE_CONFIG)?
-        }
-        Err(e) => return Err(e.into()),
-    };
+    let service =
+        match manager.open_service(NAME, ServiceAccess::CHANGE_CONFIG | ServiceAccess::START) {
+            Ok(service) => {
+                service.change_config(&info)?;
+                service
+            }
+            Err(windows_service::Error::Winapi(e)) if e.raw_os_error() == Some(1060) => manager
+                .create_service(&info, ServiceAccess::CHANGE_CONFIG | ServiceAccess::START)?,
+            Err(e) => return Err(e.into()),
+        };
     service.set_description(
-        "Rust migration observer. Separate history; no system clock adjustment.",
+        "Native NTP/NTS measurement service with explicit bounded clock takeover and rollback.",
     )?;
+    service.update_failure_actions(ServiceFailureActions {
+        reset_period: ServiceFailureResetPeriod::After(Duration::from_secs(86400)),
+        reboot_msg: Some("".into()),
+        command: Some("".into()),
+        actions: Some(vec![
+            ServiceAction {
+                action_type: ServiceActionType::Restart,
+                delay: Duration::from_secs(5),
+            },
+            ServiceAction {
+                action_type: ServiceActionType::Restart,
+                delay: Duration::from_secs(5),
+            },
+            ServiceAction {
+                action_type: ServiceActionType::Restart,
+                delay: Duration::from_secs(5),
+            },
+            ServiceAction {
+                action_type: ServiceActionType::None,
+                delay: Duration::ZERO,
+            },
+        ]),
+    })?;
+    // Deliberate safety stops must remain stopped for operator review.
+    service.set_failure_actions_on_non_crash_failures(false)?;
+    // A virtual account needs access to its data after a later explicit takeover.
+    // Only this account is granted a data ACL; clock rights are not granted here.
+    crate::windows::protect_service_files(&root(), &crate::ownership::account())?;
     Ok(())
 }
 pub fn action(command: &str) -> Result<String> {
@@ -119,7 +160,10 @@ pub fn action(command: &str) -> Result<String> {
         };
     let service = manager.open_service(NAME, access)?;
     match command {
-        "start" => service.start::<&str>(&[])?,
+        "start" => {
+            use crate::ownership::Services;
+            crate::ownership::WindowsServices.change(NAME, true)?;
+        }
         "stop" => {
             if service.query_status()?.current_state != ServiceState::Stopped {
                 service.stop()?;
@@ -133,7 +177,12 @@ pub fn action(command: &str) -> Result<String> {
                 }
             }
         }
-        "remove" => service.delete()?,
+        "remove" => {
+            crate::ownership::rollback(&root(), &mut crate::ownership::WindowsServices)?;
+            use crate::ownership::Services;
+            crate::ownership::WindowsServices.change(NAME, false)?;
+            service.delete()?;
+        }
         _ => {}
     }
     Ok(format!("{:?}", service.query_status()?.current_state))

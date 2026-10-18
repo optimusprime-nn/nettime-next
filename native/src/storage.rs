@@ -9,10 +9,8 @@ pub struct Store {
 }
 impl Store {
     pub fn open(path: &Path, read_only: bool) -> Result<Self> {
-        if !read_only {
-            if let Some(parent) = path.parent() {
-                std::fs::create_dir_all(parent)?;
-            }
+        if !read_only && let Some(parent) = path.parent() {
+            std::fs::create_dir_all(parent)?;
         }
         let db = Connection::open_with_flags(
             path,

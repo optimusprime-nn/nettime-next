@@ -1,3 +1,8 @@
+mod panels;
+use crate::{
+    comparison::{self, Report},
+    ownership::Services,
+};
 use crate::{
     config::{Config, Server},
     storage::Store,
@@ -31,8 +36,16 @@ struct Desktop {
     actions: Arc<Mutex<Vec<u8>>>,
     hidden: bool,
     smoke: bool,
+    config_path: PathBuf,
+    comparison: bool,
+    report: Option<Report>,
+    report_days: f64,
+    report_worker: Option<std::sync::mpsc::Receiver<std::result::Result<Report, String>>>,
+    operation: Option<std::sync::mpsc::Receiver<std::result::Result<String, String>>>,
+    message: String,
+    report_peer: String,
 }
-pub fn run(database: PathBuf, config_path: PathBuf, smoke: bool) -> Result<()> {
+pub fn run(database: PathBuf, config_path: PathBuf, smoke: bool, screen: String) -> Result<()> {
     let options = eframe::NativeOptions {
         viewport: egui::ViewportBuilder::default()
             .with_inner_size([1320., 850.])
@@ -40,7 +53,7 @@ pub fn run(database: PathBuf, config_path: PathBuf, smoke: bool) -> Result<()> {
         ..Default::default()
     };
     eframe::run_native(
-        "NetTime Next · Rust preview",
+        &format!("NetTime Next {} · Rust", env!("CARGO_PKG_VERSION")),
         options,
         Box::new(move |cc| {
             cc.egui_ctx.set_visuals(egui::Visuals::dark());
@@ -105,6 +118,13 @@ pub fn run(database: PathBuf, config_path: PathBuf, smoke: bool) -> Result<()> {
                     .ok()
             });
             let cfg = Config::load(&config_path).unwrap_or_default();
+            let report = if smoke && screen == "comparison" {
+                Store::open(&database, true)
+                    .and_then(|s| comparison::build(&s, 7., crate::protocol::utc()))
+                    .ok()
+            } else {
+                None
+            };
             Ok(Box::new(Desktop {
                 database,
                 config: cfg,
@@ -113,7 +133,7 @@ pub fn run(database: PathBuf, config_path: PathBuf, smoke: bool) -> Result<()> {
                 selected: String::new(),
                 history: vec![],
                 last: Instant::now() - Duration::from_secs(5),
-                settings: false,
+                settings: screen == "settings",
                 dark: true,
                 tray,
                 _open: open,
@@ -122,6 +142,14 @@ pub fn run(database: PathBuf, config_path: PathBuf, smoke: bool) -> Result<()> {
                 actions,
                 hidden: false,
                 smoke,
+                config_path,
+                comparison: screen == "comparison",
+                report,
+                report_days: 7.,
+                report_worker: None,
+                operation: None,
+                message: String::new(),
+                report_peer: String::new(),
             }))
         }),
     )
@@ -175,24 +203,6 @@ impl Desktop {
                 .unwrap_or_default();
         }
     }
-    fn settings(&mut self, ctx: &egui::Context) {
-        let mut visible = self.settings;
-        egui::Window::new("Settings").open(&mut visible).default_width(900.).show(ctx,|ui|{
-        ui.label("Source settings draft · the running clock service remains in control during the Rust migration.");
-        egui::Grid::new("settings_sources").striped(true).show(ui,|ui|{
-            for title in ["Server","Port","Security","Independent source group",""]{ui.strong(title);}ui.end_row();
-            let mut remove=None;for (i,s) in self.config.servers.iter_mut().enumerate(){ui.add(egui::TextEdit::singleline(&mut s.host).desired_width(190.));ui.add(egui::DragValue::new(&mut s.port).range(1..=65535));
-                egui::ComboBox::from_id_salt(("security",i)).selected_text(if s.security=="nts_required"{"NTS required"}else{"Plain NTP"}).show_ui(ui,|ui|{ui.selectable_value(&mut s.security,"plain_ntp".into(),"Plain NTP");ui.selectable_value(&mut s.security,"nts_required".into(),"NTS required");});
-                ui.add(egui::TextEdit::singleline(&mut s.source_group).desired_width(140.));if ui.button("Remove").clicked(){remove=Some(i);}ui.end_row();
-            }if let Some(i)=remove{self.config.servers.remove(i);}
-        });
-        if self.config.servers.len()<32 && ui.button("Add server").clicked(){self.config.servers.push(Server::default());}
-        ui.separator();egui::Grid::new("options").show(ui,|ui|{ui.label("Check every (seconds)");ui.add(egui::DragValue::new(&mut self.config.poll_seconds).range(64. ..=131072.));ui.end_row();ui.label("Keep history (days)");ui.add(egui::DragValue::new(&mut self.config.retention_days).range(7. ..=3650.));ui.end_row();ui.label("Response timeout (seconds)");ui.add(egui::DragValue::new(&mut self.config.timeout_seconds).range(0.1..=30.));ui.end_row();});
-        ui.label("Every configured server is checked. Servers sharing a source group are measured separately and count as one timing vote.");
-        if ui.button("Save settings draft").clicked(){match self.config.validate().and_then(|_|{let mut draft=self.config.clone();draft.clock.mode="observe".into();let folder=PathBuf::from(std::env::var_os("LOCALAPPDATA").unwrap_or_else(||".".into())).join("NetTimeNextNativePreview");std::fs::create_dir_all(&folder)?;std::fs::write(folder.join("settings-rust-draft.json"),serde_json::to_vec_pretty(&draft)?)?;Ok(())}){Ok(())=>self.error="Settings draft saved; running service settings unchanged.".into(),Err(e)=>self.error=e.to_string()}}
-    });
-        self.settings = visible;
-    }
 }
 fn number(v: &Value, key: &str) -> String {
     v[key]
@@ -202,19 +212,24 @@ fn number(v: &Value, key: &str) -> String {
 }
 impl eframe::App for Desktop {
     fn update(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
+        self.poll_operations();
         let mut show = false;
+        let mut open_settings = false;
         if let Ok(mut q) = self.actions.lock() {
             for action in q.drain(..) {
                 match action {
                     1 => show = true,
                     2 => {
                         show = true;
-                        self.settings = true
+                        open_settings = true
                     }
                     3 => ctx.send_viewport_cmd(ViewportCommand::Close),
                     _ => {}
                 }
             }
+        }
+        if open_settings {
+            self.open_settings();
         }
         if show {
             self.hidden = false;
@@ -235,10 +250,67 @@ impl eframe::App for Desktop {
             self.last = Instant::now();
         }
         ctx.request_repaint_after(Duration::from_millis(250));
-        egui::TopBottomPanel::top("header").show(ctx,|ui|{ui.add_space(10.);ui.horizontal(|ui|{ui.heading("NetTime Next");ui.label("Rust preview");if ui.button("Settings").clicked(){self.settings=true;}if ui.checkbox(&mut self.dark,"Dark mode").changed(){ctx.set_visuals(if self.dark{egui::Visuals::dark()}else{egui::Visuals::light()});ctx.send_viewport_cmd(ViewportCommand::SetTheme(if self.dark{egui::SystemTheme::Dark}else{egui::SystemTheme::Light}));}if ui.button("Refresh").clicked(){self.refresh();}});
-            ui.label("Windows service continues while this desktop window is closed.");ui.label("Native desktop preview · reading the current service’s evidence. Clock ownership stays with the tested service.");ui.add_space(8.);});
+        egui::TopBottomPanel::top("header").show(ctx, |ui| {
+            ui.add_space(10.);
+            ui.horizontal(|ui| {
+                ui.heading("NetTime Next");
+                ui.label("Rust preview");
+                if ui.button("Settings").clicked() {
+                    self.open_settings();
+                }
+                if ui.checkbox(&mut self.dark, "Dark mode").changed() {
+                    ctx.set_visuals(if self.dark {
+                        egui::Visuals::dark()
+                    } else {
+                        egui::Visuals::light()
+                    });
+                    ctx.send_viewport_cmd(ViewportCommand::SetTheme(if self.dark {
+                        egui::SystemTheme::Dark
+                    } else {
+                        egui::SystemTheme::Light
+                    }));
+                }
+                if ui.button("Refresh").clicked() {
+                    self.refresh();
+                }
+            });
+            ui.label("Windows service continues while this desktop window is closed.");
+            ui.label(format!(
+                "Viewing: {}",
+                if self.database.starts_with(crate::service::root()) {
+                    "Native Rust service"
+                } else {
+                    "Current NetTime Next service"
+                }
+            ));
+            ui.horizontal(|ui| {
+                if ui.button("View native service").clicked() {
+                    self.change_source(true);
+                }
+                if ui.button("View current service").clicked() {
+                    self.change_source(false);
+                }
+                ui.separator();
+                if ui
+                    .selectable_label(!self.comparison, "Live status")
+                    .clicked()
+                {
+                    self.comparison = false;
+                }
+                if ui
+                    .selectable_label(self.comparison, "Source comparison")
+                    .clicked()
+                {
+                    self.comparison = true;
+                    self.request_report();
+                }
+            });
+            ui.add_space(8.);
+        });
         egui::CentralPanel::default().show(ctx,|ui|{
             if !self.error.is_empty(){ui.colored_label(egui::Color32::LIGHT_YELLOW,&self.error);}
+            if !self.message.is_empty(){ui.label(&self.message);}
+            if self.comparison {self.comparison_panel(ui);return;}
             if let Some(d)=&self.decision {
                 ui.strong(d["synchronization"]["explanation"].as_str().unwrap_or_else(||d["explanation"].as_str().unwrap_or("Collecting measurements")));
                 let rows:Vec<(String,Value)>=if let Some(servers)=d["servers"].as_object(){servers.iter().map(|(k,v)|(k.clone(),v.clone())).collect()}else if let Some(servers)=d["servers"].as_array(){servers.iter().map(|s|{let mut latest=s["latest"].clone();if let Some(v)=latest.as_object_mut(){v.insert("reach".into(),s["reach_octal"].clone());}(s["peer"].as_str().unwrap_or("").into(),latest)}).collect()}else{vec![]};
@@ -252,7 +324,7 @@ impl eframe::App for Desktop {
             }else{ui.label("Waiting for service history. The service and settings can be installed independently of this window.");}
         });
         if self.settings {
-            self.settings(ctx)
+            self.settings_panel(ctx)
         }
         if self.smoke {
             ctx.send_viewport_cmd(ViewportCommand::Close);

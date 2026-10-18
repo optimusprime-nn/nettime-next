@@ -1,45 +1,98 @@
-# NetTime Next — Rust migration
+# NetTime Next — native Rust preview 0.4.1
 
-This is an additive, native Rust implementation. The original clock services were restored after the 0.3.1 direction regression.
-NetTime Next and this native port collect measurements while the fix is validated. No Python interpreter or
-Python subprocess is used by the native binaries.
+Native Rust desktop and Windows service, with no Python runtime or Python
+subprocess. The MSVC runtime is linked statically and packaging checks the
+actual executable import tables. This remains an unsigned preview; full RFC
+5905 conformance and seven-day clock-control endurance are still outstanding.
 
-The MSVC runtime is linked statically. Packaging inspects both actual PE import
-tables and rejects binaries that still require a separate Visual C++ runtime.
+## Clock ownership
 
-Implemented: NTPv3/v4 header validation and era handling; NTS-KE with TLS 1.3,
-certificate verification and directional exporters; AES-SIV NTP authentication,
-cookie renewal and key-exchange backoff; concurrent polling of all configured
-sources; persistent RATE/DENY/RSTR restrictions; eight-stage clock filtering,
-source-group voting, intersection, clustering and weighted combination;
-SQLite evidence with minimum seven-day retention; dark native desktop with
-stratum/security/history/evidence and notification-area icon; separate SCM
-service host and installable preview.
+The native service measures every configured NTP/NTS source, keeps at least
+seven days of SQLite evidence, and starts in observation mode. Installing it
+does not take the clock away from the original NetTime or Windows Time services.
 
-The native desktop reads the current service history by default. Settings are
-edited as an observer draft: they do not silently change the active clock
-controller. Native foreground/service collection uses a separate database and
-rejects slew mode. The existing database schema and JSON configuration are
-retained, but native decision policy identifiers distinguish ported decisions.
+Settings includes **Take over clock** and **Restore previous clocks**. Both
+request Windows administrator approval. Takeover requires current independent
+source agreement within the configured slew limit. Before changing anything,
+it flushes an ownership journal containing the previous configuration bytes,
+service startup/running states, account and existing clock privilege. It stops
+and disables competing controllers (`NetTimeSvc`, `W32Time` and `NetTimeNext`),
+then starts the native service under its own virtual account with the time
+privilege confined to that account. The desktop never adjusts the clock.
 
-Still to port and validate before replacing the active service: Windows clock
-adjustment backend, durable takeover/rollback, active settings administration,
-the full comparison/export UI, complete automated parity and installed service
-lifecycle checks. Full RFC 5905 conformance is not claimed by either preview.
-NTS control-response handling needs the same remaining conformance work tracked
-in GitHub issue 1. Do not use this preview as a second clock writer.
+The controller uses the corrected reciprocal Windows precise-frequency
+conversion. Corrections are gradual and bounded, with fresh-filter warmup,
+stale-sample checks, an independent ownership/holdover watchdog, leap and
+consensus suspension, and neutral-rate restoration on shutdown. There are no
+clock steps. Windows rate readback is logged alongside each correction; it is
+not itself evidence of actual convergence. A disposable CI test measures real
+wall-clock response against QPC for both correction signs. Failure injection
+tests verify each takeover mutation and retryable rollback.
 
-Build on Windows with the MSVC Rust toolchain:
+Restore previous clocks reinstates exact saved configuration bytes and prior
+service states and removes only the clock right added by the transaction.
+Incomplete restoration retains the journal for retry. Upgrade is blocked until
+an active transaction is restored. Uninstall restores ownership before removing
+the native service; history and settings are retained.
+
+## Settings and comparison
+
+Settings edits the native Windows service configuration: source address,
+NTP port, NTS policy and key-exchange port, independent source group, polling,
+timeout, retention, source-distance and clock limits. **Apply settings** validates
+the request before stopping a running service and restores the previous
+configuration on failure. Saving or importing settings always selects observation;
+only the separate takeover action grants ownership. Restore ownership before
+changing the settings of an active controller. The current Python service's
+settings can be imported without modifying that service.
+
+The desktop can switch between native and current service evidence. Source
+comparison supports 24 hours, seven days and all retained history, including
+valid-attempt percentage, coverage, median and P95 offset/delay, offset variation,
+stratum range/changes, authentication coverage, selected duration, failures,
+selection/rejection reasons and a selection-change timeline. Offset plots show
+recorded measurements without bridging gaps. CSV/JSON comparison exports and
+full SQLite evidence exports run in the background and report their folder.
+Reports use one read snapshot, exclude future records, and expire selection
+duration after three poll intervals rather than crediting service downtime.
+
+## Install and commands
+
+Run `NetTimeNext-Rust-0.4.1-Preview-Setup-x64.exe`. The default service task
+registers and starts `NetTimeNextNativePreview` automatically as LocalService,
+using `ProgramData\NetTimeNextNativePreview`. The existing service name is kept
+for preview upgrade compatibility. Native evidence stays in its own database;
+the Python history remains available from **View current service**.
+
+`NetTimeNextNativeService.exe --help` lists commands. Administrative commands:
+
+```
+--apply-config FILE
+--import-settings
+--takeover
+--rollback
+--start-service
+--stop-service
+--health
+```
+
+`--compare-export FOLDER --days 7 --database FILE` exports a comparison.
+`--export FOLDER --database FILE` exports full evidence. Foreground collection
+requires `--config FILE --data-dir FOLDER` with `--once` or `--headless`, rejects
+clock-control mode and refuses either installed service database.
+
+Build with the MSVC Rust toolchain and Inno Setup:
 
 ```
 python package.py --iscc C:\path\to\ISCC.exe
 ```
 
-`NetTimeNextNativeService.exe --help` lists diagnostic and service commands.
-Foreground collection requires explicit `--config FILE --data-dir FOLDER`
-with `--once` or `--headless`. `--export FOLDER --database FILE` exports JSON.
-The optional service is named `NetTimeNextNativePreview`, runs as LocalService,
-uses `ProgramData\NetTimeNextNativePreview`, and never changes `NetTimeNext`,
-`NetTimeSvc`, `W32Time` or clock privileges. It is registered for manual start.
+The Python command is build tooling only. CI tests the installed service,
+administration, virtual identity and privilege, independent watchdog, physical
+actuator response, rollback, desktop screens, reports, uninstall and retained
+history on a disposable Windows runner. Synthetic lifecycle evidence is confined
+to that runner; no valid NTP sample fixtures can drive its controller.
 
-The installer is a migration preview, not a replacement for the active release.
+NTP/NTS transport, filtering and mitigation parity tests remain in place. NTS
+control-response handling still needs the remaining conformance work tracked in
+GitHub issue 1. This port does not claim completion of that wider protocol work.

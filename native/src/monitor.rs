@@ -22,6 +22,8 @@ pub struct Monitor {
     last_wall: f64,
     last_mono: f64,
     next_prune: f64,
+    clock: Option<crate::clock::Session>,
+    instance: String,
 }
 impl Monitor {
     pub fn new(cfg: Config, store: Store) -> Result<Self> {
@@ -59,9 +61,39 @@ impl Monitor {
             last_wall: wall,
             last_mono: now,
             next_prune: now + 3600.,
+            clock: None,
+            instance: String::new(),
         })
     }
+    pub fn for_service(cfg: Config, store: Store, root: &std::path::Path) -> Result<Self> {
+        let options = cfg.clock.clone();
+        let mut observed = cfg.clone();
+        observed.clock.mode = "observe".into();
+        let mut monitor = Self::new(observed, store)?;
+        let mut nonce = [0u8; 32];
+        getrandom::fill(&mut nonce)
+            .map_err(|e| anyhow::anyhow!("Cannot identify collector session: {e}"))?;
+        monitor.instance = hex::encode(nonce);
+        crate::windows::atomic_write(
+            &root.join("data/service-instance.json"),
+            &serde_json::to_vec(
+                &json!({"id":monitor.instance,"pid":std::process::id(),"utc":utc()}),
+            )?,
+        )?;
+        if options.mode == "slew" {
+            monitor.clock = Some(crate::clock::Session::start(root, options)?);
+            monitor.store.event(
+                "clock_controller_started",
+                &json!({"mode":"slew","limits":cfg.clock}),
+            )?;
+        }
+        monitor.cfg = cfg;
+        Ok(monitor)
+    }
     pub fn collect(&mut self) -> Result<Option<Value>> {
+        if let Some(clock) = &self.clock {
+            clock.check()?;
+        }
         let now = mono();
         let wall = utc();
         let step = (wall - self.last_wall) - (now - self.last_mono);
@@ -72,6 +104,9 @@ impl Monitor {
             )?;
             for p in &mut self.peers {
                 p.samples.clear()
+            }
+            if let Some(clock) = &self.clock {
+                clock.update(&selection::Assessment::default(), now)?;
             }
             self.next_prune = now + 86400.;
         }
@@ -101,6 +136,16 @@ impl Monitor {
             return Ok(None);
         }
         let assessment = selection::assess(&self.peers, &self.cfg, mono());
+        let clock_action = if let Some(clock) = &self.clock {
+            let plan = clock.update(&assessment, mono())?;
+            let action = serde_json::to_value(plan)?;
+            let mut evidence = action.clone();
+            evidence["assessment"] = serde_json::to_value(&assessment)?;
+            self.store.event("clock_correction", &evidence)?;
+            action
+        } else {
+            json!({"action":"observe","reason":"Clock control is off; explicit takeover required"})
+        };
         let mut servers = serde_json::Map::new();
         for p in &self.peers {
             let mut v = p.latest.as_ref().map(|s| s.data()).unwrap_or(Value::Null);
@@ -117,7 +162,7 @@ impl Monitor {
             }
             servers.insert(p.server.key(), v);
         }
-        let decision = json!({"utc":utc(),"policy":"native-migration-observer-v1","selected":assessment.selected,"confidence":"Source agreement; independence depends on configured groups","explanation":assessment.explanation,"synchronization":assessment,"servers":servers,"clock_action":{"action":"observe","reason":"Existing service retains clock ownership"}});
+        let decision = json!({"utc":utc(),"collector_instance":self.instance,"policy":"native-service-v2","selected":assessment.selected,"confidence":"Source agreement; independence depends on configured groups","explanation":assessment.explanation,"synchronization":assessment,"servers":servers,"clock_action":clock_action});
         let states=self.peers.iter().map(|p|(p.server.key(),json!({"interval":p.interval,"disabled":p.disabled,"reach":p.reach,"next_utc":utc()+(p.next_due-mono()).max(0.),"nts_failures":p.nts.failures,"nts_retry_utc":utc()+(p.nts.retry_at-mono()).max(0.)}))).collect::<Vec<_>>();
         self.store.save(self.cycle, &samples, &decision, &states)?;
         self.cycle += 1;
@@ -130,7 +175,7 @@ impl Monitor {
     pub fn run(&mut self, stop: Arc<AtomicBool>) -> Result<()> {
         self.store.event(
             "native_collector_started",
-            &json!({"version":env!("CARGO_PKG_VERSION"),"mode":"observe"}),
+            &json!({"version":env!("CARGO_PKG_VERSION"),"mode":self.cfg.clock.mode}),
         )?;
         while !stop.load(Ordering::Relaxed) {
             self.collect()?;

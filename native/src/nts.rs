@@ -39,7 +39,7 @@ fn fields(data: &[u8], mut pos: usize) -> Result<Vec<(u16, &[u8], usize)>> {
         ensure!(pos + 4 <= data.len(), "Truncated extension");
         let n = word(&data[pos + 2..]) as usize;
         ensure!(
-            n >= 4 && n % 4 == 0 && pos + n <= data.len(),
+            n >= 4 && n.is_multiple_of(4) && pos + n <= data.len(),
             "Invalid extension length"
         );
         out.push((word(&data[pos..]), &data[pos + 4..pos + n], pos));
@@ -206,7 +206,7 @@ fn establish(server: &Server, timeout: f64) -> Result<Session> {
             2 | 3 => bail!("NTS-KE server error/warning"),
             5 => {
                 ensure!(
-                    !body.is_empty() && size % 4 == 0 && size <= 1024,
+                    !body.is_empty() && size.is_multiple_of(4) && size <= 1024,
                     "Invalid cookie"
                 );
                 if cookies.len() < 8 {
