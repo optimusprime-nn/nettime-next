@@ -40,7 +40,8 @@ def main():
         StringStruct('ProductVersion', '{VERSION}.0')])]),
         VarFileInfo([VarStruct('Translation', [1033,1200])])])''', encoding="utf-8")
     common = [sys.executable, "-m", "PyInstaller", "--noconfirm", "--clean", "--noupx", "--onedir",
-              "--add-data", "settings.example.json;.", "--version-file", str(version_file)]
+              "--add-data", "settings.example.json;.", "--add-data", "nettime.ico;.",
+              "--icon", ROOT / 'nettime.ico', "--version-file", str(version_file)]
     run(*common, "--name", "NetTimeNext", "--windowed", "--manifest", ROOT / "desktop.manifest", "app.py")
     from PyInstaller.utils.win32.winmanifest import read_manifest_from_executable
     import xml.etree.ElementTree as ET

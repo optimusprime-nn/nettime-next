@@ -26,6 +26,13 @@ class ServiceContractTests(unittest.TestCase):
     def tearDown(self):
         self.temp.cleanup()
 
+    def test_health_retains_last_verified_slew(self):
+        self.assertIsNone(self.store.last_slew())
+        self.store.event('clock_correction', {'action': 'slew', 'windows_reported_rate_ppm': 5}, utc=10)
+        self.store.event('clock_correction', {'action': 'hold'}, utc=11)
+        self.store.event('other', {'action': 'slew'}, utc=12)
+        self.assertEqual(self.store.last_slew(), {'utc': 10, 'action': 'slew', 'windows_reported_rate_ppm': 5})
+
     def test_desktop_reads_database_without_write_access(self):
         self.store.event("baseline", {})
         reader = Store(self.store.path, read_only=True)

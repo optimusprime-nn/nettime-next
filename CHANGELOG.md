@@ -1,3 +1,10 @@
+## 0.3.1 — Clock ownership and notification area
+
+- Enables the explicitly requested bounded slew handover, with rollback and exclusive service ownership.
+- Adds a notification-area icon: minimize to tray, double-click to restore, and an Open/Settings/Exit desktop menu.
+- Adds a multi-resolution application icon and health evidence for the last actual clock adjustment and Windows rate readback.
+- Adds an elevated live deployment script that waits for fresh source agreement and verifies the first adjustment, restoring previous ownership if verification fails.
+
 # Change history
 
 ## 0.3.1 — Explicit bounded clock takeover

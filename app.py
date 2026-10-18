@@ -14,7 +14,7 @@ from types import SimpleNamespace
 
 from monitor import BASE, InstanceLock, Monitor, load_config
 from storage import Store
-from runtime_paths import VERSION, machine_root
+from runtime_paths import VERSION, machine_root, RESOURCE_DIR
 from selection import Peer
 
 
@@ -58,7 +58,11 @@ def gui(cfg, store, smoke=False, config_path=BASE / "settings.json", service_vie
     from tkinter import filedialog, messagebox, ttk
     from tkinter.scrolledtext import ScrolledText
 
+    if os.name == 'nt':
+        import ctypes
+        ctypes.windll.shell32.SetCurrentProcessExplicitAppUserModelID('NetTimeNext.Desktop')
     root = tk.Tk()
+    root.iconbitmap(str(RESOURCE_DIR / 'nettime.ico'))
     dpi_layout = DpiLayout(root)
     root.title(f"NetTime Next {VERSION} · {'Windows service' if service_view else 'Standalone'} observer")
     dpi_layout.size_window(root, 1430, 830, 1060, 680)
@@ -278,6 +282,9 @@ def gui(cfg, store, smoke=False, config_path=BASE / "settings.json", service_vie
     table.bind("<<TreeviewSelect>>", draw_history)
     canvas.bind("<Configure>", draw_history)
     root.protocol("WM_DELETE_WINDOW", close)
+    if os.name == 'nt':
+        from tray import TrayController
+        root._nettime_tray = TrayController(root, settings, close, status)
 
     def tick():
         nonlocal last, last_decision_id, next_service_read, service_state
@@ -310,6 +317,9 @@ def gui(cfg, store, smoke=False, config_path=BASE / "settings.json", service_vie
                     sync = payload.get('synchronization', {})
 
                     action = payload.get('clock_action', {})
+                    if hasattr(root, '_nettime_tray'):
+                        root._nettime_tray.backend.update('NetTime Next | ' +
+                            ('Clock control: ' + action.get('action', 'waiting') if payload.get('clock_mode') == 'slew' else 'Measurement only'))
 
                     sync_status.set("Synchronization: " + sync.get('explanation', 'Available after upgrading the service') +
 

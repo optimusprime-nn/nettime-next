@@ -87,6 +87,11 @@ class Store:
             row = db.execute("SELECT id,payload FROM decisions ORDER BY id DESC LIMIT 1").fetchone()
             return (row[0], json.loads(row[1])) if row else (0, None)
 
+    def last_slew(self):
+        with self.connect() as db:
+            row = db.execute("SELECT utc,payload FROM events WHERE kind='clock_correction' AND json_extract(payload,'$.action')='slew' ORDER BY id DESC LIMIT 1").fetchone()
+            return dict(utc=row[0], **json.loads(row[1])) if row else None
+
     def prune(self, now=None):
         cutoff = (time.time() if now is None else now) - self.retention_days * 86400
         with self.connect() as db:
