@@ -144,7 +144,7 @@ fn whole_number<'de, D: serde::Deserializer<'de>>(d: D) -> std::result::Result<u
     let value = number
         .as_f64()
         .ok_or_else(|| serde::de::Error::custom("Expected a whole number"))?;
-    if value.is_finite() && value >= 0. && value <= 65535. && value.fract() == 0. {
+    if value.is_finite() && (0. ..=65535.).contains(&value) && value.fract() == 0. {
         Ok(value as u64)
     } else {
         Err(serde::de::Error::custom(
