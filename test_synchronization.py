@@ -5,11 +5,32 @@ import tempfile
 import unittest
 from unittest.mock import Mock
 
-from clock_control import Controller, SlewPlanner
+from clock_control import Controller, SlewPlanner, adjustment_for_rate, rate_for_adjustment
 from monitor import validate_config
 from protocol import Sample
 from selection import Peer
 from synchronization import assess, filtered, intersection
+
+
+class WindowsRateConversionTests(unittest.TestCase):
+    def test_wall_clock_speed_uses_inverse_frequency_direction(self):
+        # Recorded on the live host: larger precise frequency slows wall time.
+        self.assertLess(adjustment_for_rate(10000000, 200), 10000000)
+        self.assertGreater(adjustment_for_rate(10000000, -200), 10000000)
+        self.assertLess(rate_for_adjustment(10000000, 10002000), -199)
+        self.assertGreater(rate_for_adjustment(10000000, 9998000), 199)
+
+    def test_quantization_never_exceeds_requested_wall_rate(self):
+        for increment in (1000000, 3579545, 10000000):
+            for target in (-500, -250, -1, 0, 1, 250, 500):
+                actual = rate_for_adjustment(increment, adjustment_for_rate(increment, target))
+                self.assertLessEqual(abs(actual), abs(target) + 1e-6)
+                self.assertLess(abs(actual - target), 1000001 / increment)
+
+    def test_invalid_frequency_or_unbounded_request_is_rejected(self):
+        for increment, rate in ((0, 1), (10000000, 501), (10000000, float('nan'))):
+            with self.assertRaises(ValueError):
+                adjustment_for_rate(increment, rate)
 
 
 def population(offsets=(1, 1.1, .9), count=8, now=1000):

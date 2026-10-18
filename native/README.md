@@ -1,7 +1,7 @@
 # NetTime Next — Rust migration
 
-This is an additive, native Rust implementation. The installed 0.3.1 service
-retains clock ownership while this port is validated. No Python interpreter or
+This is an additive, native Rust implementation. The original clock services were restored after the 0.3.1 direction regression.
+NetTime Next and this native port collect measurements while the fix is validated. No Python interpreter or
 Python subprocess is used by the native binaries.
 
 Implemented: NTPv3/v4 header validation and era handling; NTS-KE with TLS 1.3,

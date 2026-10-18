@@ -46,4 +46,5 @@ jobs:
             dist/*Setup-x64.exe
             dist/build-manifest.json
             dist/SHA256SUMS.txt
+            dist/clock-response.json
           if-no-files-found: error

@@ -57,8 +57,11 @@ def main():
             time.sleep(.2)
         assert started, 'Virtual service account did not initialize its clock backend'
         assert all(json.loads(p[0])['action'] != 'slew' for p in slewed), 'Fixture unexpectedly steered the clock'
-        # Exercise the actual rate/readback API on this disposable runner only.
-        # Neutralize immediately; no usable sample is supplied to the service.
+        # Stop the fixture service so its no-consensus neutralization cannot
+        # interfere with an independent physical actuator response measurement.
+        backend.change(SERVICE_NAME, False)
+        subprocess.run([sys.executable, str(Path(__file__).with_name('Check-ClockResponse.py'))], check=True)
+        # Also retain the API round-trip test; it is not convergence evidence.
         from clock_control import WindowsClock
         clock = WindowsClock()
         try:

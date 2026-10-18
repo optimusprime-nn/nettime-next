@@ -77,6 +77,25 @@ class SlewPlanner:
                     offset_ms=offset, reason='Bounded gradual correction; no clock step')
 
 
+def adjustment_for_rate(increment, ppm):
+    """Map positive *wall-clock speed* to the precise API's frequency divisor.
+
+    The precise API is not the legacy per-tick increment API. Increasing its
+    frequency value slows wall time. Round towards neutral so quantization
+    cannot exceed the requested absolute rate.
+    """
+    if increment <= 0 or not math.isfinite(ppm) or abs(ppm) > 500:
+        raise ValueError('Invalid clock frequency or rate outside 500 ppm bound')
+    frequency = increment / (1 + ppm / 1000000)
+    return math.ceil(frequency) if ppm >= 0 else math.floor(frequency)
+
+
+def rate_for_adjustment(increment, adjustment):
+    if increment <= 0 or adjustment <= 0:
+        raise ValueError('Windows reported an invalid clock frequency')
+    return (increment / adjustment - 1) * 1000000
+
+
 class WindowsClock:
     def __init__(self):
         import win32api
@@ -105,7 +124,7 @@ class WindowsClock:
     def rate(self, ppm):
         if not math.isfinite(ppm) or abs(ppm) > 500:
             raise ValueError('Clock rate exceeds 500 ppm safety bound')
-        adjustment = round(self.increment * (1 + ppm / 1000000))
+        adjustment = adjustment_for_rate(self.increment, ppm)
         if not self.kernel.SetSystemTimeAdjustmentPrecise(adjustment, False):
             raise ctypes.WinError(ctypes.get_last_error())
         actual, increment, disabled = ctypes.c_ulonglong(), ctypes.c_ulonglong(), wt.BOOL()
@@ -114,7 +133,7 @@ class WindowsClock:
         if disabled.value or not increment.value:
             raise RuntimeError('Windows did not enable the requested clock adjustment')
         # Readback is the OS-reported setting, not an external accuracy test.
-        return (actual.value / increment.value - 1) * 1000000
+        return rate_for_adjustment(increment.value, actual.value)
 
     def restore(self):
         if not self.kernel.SetSystemTimeAdjustmentPrecise(0, True):

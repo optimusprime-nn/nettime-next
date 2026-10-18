@@ -1,3 +1,11 @@
+## 0.3.2 — Correct precise clock frequency direction
+
+- Fixes the inverted Windows precise-frequency conversion found by the longer live run. Positive wall-speed corrections now reduce the frequency divisor; readback uses the same wall-speed convention.
+- Rounds towards neutral to keep actual quantized rates within their requested bounds.
+- Adds a disposable Windows test measuring actual clock progress against QPC for both correction signs; API readback alone is no longer sufficient evidence.
+- Original clock services were restored after the 0.3.1 failure. NetTime Next remains in observer mode while the fix is validated.
+- Removes unused Linux tray dependencies from the Rust preview and updates the build-only setuptools pin.
+
 ## 0.3.1 — Clock ownership and notification area
 
 - Enables the explicitly requested bounded slew handover, with rollback and exclusive service ownership.

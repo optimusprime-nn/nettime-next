@@ -18,7 +18,7 @@ sha2 = "0.10"
 zeroize = "1.8"
 eframe = { version = "0.33", default-features = false, features = ["default_fonts", "glow"] }
 egui_plot = "0.34"
-tray-icon = "0.26"
+tray-icon = { version = "0.26", default-features = false }
 windows-service = "0.8"
 windows-sys = { version = "0.61", features = ["Win32_Foundation", "Win32_System_Threading", "Win32_Security", "Win32_System_LibraryLoader", "Win32_System_SystemInformation", "Win32_System_Services"] }
 
