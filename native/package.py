@@ -22,6 +22,9 @@ def main():
     run(cargo,'fmt','--check')
     run(cargo,'test','--locked')
     run(cargo,'build','--release','--locked')
+    from check_imports import verify
+    for name in ('NetTimeNextNative.exe','NetTimeNextNativeService.exe'):
+        verify(ROOT/'target'/'release'/name)
     metadata=json.loads(run(cargo,'metadata','--locked','--format-version','1',capture=True))
     notices=ROOT/'target'/'third-party-licenses'
     notices.mkdir(parents=True,exist_ok=True)
@@ -50,7 +53,8 @@ def main():
                   sha256=hashlib.sha256(installer.read_bytes()).hexdigest(),
                   source_commit=run('git','rev-parse','HEAD',capture=True).strip(),
                   source_dirty=bool(run('git','status','--porcelain','--untracked-files=no',capture=True)),
-                  rustc=run(Path(cargo).with_name('rustc.exe') if Path(cargo).is_absolute() else 'rustc','--version',capture=True).strip(),signed=False)
+                  rustc=run(Path(cargo).with_name('rustc.exe') if Path(cargo).is_absolute() else 'rustc','--version',capture=True).strip(),
+                  crt_linkage='static',runtime_imports_check='passed',signed=False)
     (installer.parent/'rust-build-manifest.json').write_text(json.dumps(manifest,indent=2)+'\n',encoding='utf-8')
     (installer.parent/'RUST-SHA256SUMS.txt').write_text(f"{manifest['sha256']}  {installer.name}\n",encoding='utf-8')
     print(json.dumps(manifest,indent=2))

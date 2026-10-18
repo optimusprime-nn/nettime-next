@@ -4,6 +4,9 @@ This is an additive, native Rust implementation. The original clock services wer
 NetTime Next and this native port collect measurements while the fix is validated. No Python interpreter or
 Python subprocess is used by the native binaries.
 
+The MSVC runtime is linked statically. Packaging inspects both actual PE import
+tables and rejects binaries that still require a separate Visual C++ runtime.
+
 Implemented: NTPv3/v4 header validation and era handling; NTS-KE with TLS 1.3,
 certificate verification and directional exporters; AES-SIV NTP authentication,
 cookie renewal and key-exchange backoff; concurrent polling of all configured
