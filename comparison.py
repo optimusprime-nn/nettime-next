@@ -22,14 +22,23 @@ def build_report(store, days=7, now=None):
     start = now - days * 86400
     with store.connect() as db:
         db.execute("BEGIN")
-        samples = db.execute("SELECT utc,host,port,status,stratum,offset_ms,delay_ms,payload FROM samples WHERE utc>=? AND utc<=? ORDER BY utc,id", (start, now)).fetchall()
-        decisions = db.execute("SELECT utc,payload FROM decisions WHERE utc>=? AND utc<=? ORDER BY utc,id", (start, now)).fetchall()
+        # Do not retain full packet/assessment payloads for a week in UI memory.
+        samples = db.execute("SELECT utc,host,port,status,stratum,offset_ms,delay_ms,json_extract(payload,'$.authentication_status') FROM samples WHERE utc>=? AND utc<=? ORDER BY utc,id", (start, now)).fetchall()
+        def compact(row):
+            stamp, encoded = row
+            full = json.loads(encoded)
+            selected = full.get('selected')
+            d = {k: full.get(k) for k in ('selected', 'explanation', 'reasons')}
+            d['servers'] = [dict(peer=s.get('peer'), interval_seconds=s.get('interval_seconds', 64))
+                            for s in full.get('servers', []) if s.get('peer') == selected]
+            return stamp, d
+        decisions = [compact(row) for row in db.execute("SELECT utc,payload FROM decisions WHERE utc>=? AND utc<=? ORDER BY utc,id", (start, now))]
         carry = db.execute("SELECT utc,payload FROM decisions WHERE utc<? ORDER BY utc DESC,id DESC LIMIT 1", (start,)).fetchone()
+        carry = compact(carry) if carry else None
     grouped, reasons, spans, wins = defaultdict(list), defaultdict(Counter), Counter(), Counter()
     timeline = []
     series = ([carry] if carry else []) + decisions
-    for i, (stamp, encoded) in enumerate(series):
-        payload = json.loads(encoded)
+    for i, (stamp, payload) in enumerate(series):
         selected = payload.get("selected")
         # Evidence expires: do not count service downtime as selected uptime.
         intervals = [s.get("interval_seconds", 64) for s in payload.get("servers", []) if s.get('peer') == selected]
@@ -38,14 +47,14 @@ def build_report(store, days=7, now=None):
         duration = max(0, end - max(start, stamp))
         if selected:
             spans[selected] += duration
-        previous = json.loads(series[i - 1][1]).get("selected") if i else None
+        previous = series[i - 1][1].get("selected") if i else None
         if stamp >= start:
             if selected != previous:
                 if selected:
                     wins[selected] += 1
                 timeline.append(dict(utc=stamp, selected=selected, previous=previous,
                                      reason=payload.get("explanation", "")))
-            for peer, reason in payload.get("reasons", {}).items():
+            for peer, reason in (payload.get("reasons") or {}).items():
                 reasons[peer][reason.split(';')[0].split(' (')[0]] += 1
     for row in samples:
         grouped[f"{row[1]}:{row[2]}"].append(row)
@@ -54,7 +63,7 @@ def build_report(store, days=7, now=None):
         valid = [r for r in rows if r[3] == 'valid' and r[5] is not None and r[6] is not None]
         offsets, delays = [r[5] for r in valid], [r[6] for r in valid]
         strata = [r[4] for r in valid if r[4] is not None]
-        authenticated = sum(json.loads(r[7]).get('authentication_status') == 'authenticated' for r in valid)
+        authenticated = sum(r[7] == 'authenticated' for r in valid)
         gaps = [b[0] - a[0] for a, b in zip(rows, rows[1:])]
         servers.append(dict(peer=peer, attempts=len(rows), valid=len(valid), valid_percent=100 * len(valid) / len(rows),
             first_utc=rows[0][0], last_utc=rows[-1][0], observed_hours=(rows[-1][0] - rows[0][0]) / 3600,
