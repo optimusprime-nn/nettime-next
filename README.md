@@ -1,4 +1,4 @@
-# NetTime Next — Windows service preview 0.3.1
+# NetTime Next — Windows service preview 0.3.2
 
 NetTime Next checks every configured NTP/NTS source and retains at least seven
 days of measurements and selection evidence. The service collects while the
@@ -6,9 +6,16 @@ desktop is closed or users are logged out. Installation starts in measurement mo
 can enable bounded gradual correction. Full conformance and endurance validation
 remain outstanding; this is a slew-only preview, not a complete RFC implementation.
 
+Version 0.3.1 had a reversed Windows precise-frequency conversion, discovered by
+longer live measurement. The original clock services were restored. Version
+0.3.2 corrects the conversion and adds measured wall-clock response testing;
+readback alone is not evidence of convergence. See
+[the regression report](docs/CLOCK-RESPONSE-REGRESSION.md). The Rust migration
+preview is separate and does not adjust the clock.
+
 ## Install and upgrade
 
-Run `NetTimeNext-0.3.1-Setup-x64.exe`. Python is bundled. Windows 10/11 x64 is the
+Run `NetTimeNext-0.3.2-Setup-x64.exe`. Python is bundled. Windows 10/11 x64 is the
 target; installation needs administrator approval. Install over the existing
 version to preserve configured servers, settings and history. Installation does
 not stop the original NetTime or Windows Time services. This preview is unsigned.

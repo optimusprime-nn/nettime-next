@@ -34,7 +34,7 @@ Name: "desktopicon"; Description: "Create a desktop shortcut"; GroupDescription:
 Source: "..\dist\NetTimeNext\*"; DestDir: "{app}\App"; Flags: ignoreversion recursesubdirs createallsubdirs
 Source: "..\dist\NetTimeNextService\*"; DestDir: "{app}\Service"; Flags: ignoreversion recursesubdirs createallsubdirs
 Source: "..\README.md"; DestDir: "{app}"; Flags: ignoreversion
-Source: "..\docs\WINDOWS-SERVICE.md"; DestDir: "{app}"; Flags: ignoreversion
+Source: "..\docs\*.md"; DestDir: "{app}\docs"; Flags: ignoreversion
 Source: "..\THIRD-PARTY-NOTICES.md"; DestDir: "{app}"; Flags: ignoreversion
 Source: "..\dist\THIRD-PARTY-LICENSES\*"; DestDir: "{app}\ThirdPartyLicenses"; Flags: ignoreversion
 

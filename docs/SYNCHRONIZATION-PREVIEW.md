@@ -1,6 +1,8 @@
 # Synchronization preview: implementation and validation gates
 
-Version 0.3.1 enables explicit administrator-approved takeover for the bounded
+Version 0.3.2 corrects the reversed Windows actuator found in the longer 0.3.1
+live run. The original controllers have been restored; NetTime Next currently
+observes only. Explicit administrator-approved takeover remains available for the bounded
 slew-only profile, following the user's request to hand over now. Installation
 still starts in observation mode. Source agreement, offset limits, warmup,
 exclusive ownership, rate bounds, holdover and rollback checks remain enforced.
@@ -23,10 +25,12 @@ Full RFC conformance and endurance validation are not claimed complete.
 Unit tests and NTS interoperability do not establish complete RFC 5905 conformance.
 The legacy diagnostic recommendation remains separate from the synchronization
 assessment. The real Windows CI fixture verifies the frozen takeover command,
-virtual service identity and clock permission, a bounded 1 ppm API/readback test,
-and exact rollback. It runs only on disposable GitHub-hosted runners.
-The user explicitly authorized live takeover on 2026-10-17; the service will use
-bounded slew only, with saved rollback state. No automatic clock steps are enabled.
+virtual service identity and clock permission, both correction signs measured
+against QPC, a bounded 1 ppm API/readback test, and exact rollback. It runs only on disposable GitHub-hosted runners.
+The user explicitly authorized the initial live takeover and later rollback after
+the longer run exposed the frequency-direction regression. API readback was
+insufficient evidence of correct control. See [the regression report](CLOCK-RESPONSE-REGRESSION.md).
+No automatic clock steps are enabled.
 
 ## Standards and interoperability
 

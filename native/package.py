@@ -25,6 +25,9 @@ def main():
     metadata=json.loads(run(cargo,'metadata','--locked','--format-version','1',capture=True))
     notices=ROOT/'target'/'third-party-licenses'
     notices.mkdir(parents=True,exist_ok=True)
+    for old in notices.iterdir():
+        if old.is_file():
+            old.unlink()
     packages=[]
     for package in metadata['packages']:
         if package['source'] is None:
