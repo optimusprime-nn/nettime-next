@@ -45,8 +45,48 @@ struct Desktop {
     message: String,
     report_peer: String,
 }
-pub fn run(database: PathBuf, config_path: PathBuf, smoke: bool, screen: String) -> Result<()> {
+pub fn run(
+    database: PathBuf,
+    config_path: PathBuf,
+    smoke: bool,
+    screen: String,
+    software: bool,
+) -> Result<()> {
+    // Windows' built-in Direct3D software adapter also works without an OpenGL
+    // driver (server sessions, remote desktops and disposable test machines).
+    let mut setup = eframe::egui_wgpu::WgpuSetupCreateNew::default();
+    setup.instance_descriptor.backends = wgpu::Backends::DX12;
+    setup
+        .instance_descriptor
+        .backend_options
+        .dx12
+        .shader_compiler = wgpu::Dx12Compiler::Fxc;
+    setup.native_adapter_selector = Some(Arc::new(move |adapters, surface| {
+        let chosen = adapters
+            .iter()
+            .filter(|adapter| surface.is_none_or(|s| adapter.is_surface_supported(s)))
+            .filter(|adapter| !software || adapter.get_info().device_type == wgpu::DeviceType::Cpu)
+            .min_by_key(|adapter| match adapter.get_info().device_type {
+                wgpu::DeviceType::IntegratedGpu => 0,
+                wgpu::DeviceType::DiscreteGpu => 1,
+                wgpu::DeviceType::VirtualGpu => 2,
+                wgpu::DeviceType::Cpu => 3,
+                _ => 4,
+            })
+            .ok_or_else(|| "No compatible Windows graphics adapter is available".to_string())?;
+        eprintln!(
+            "Desktop renderer: {} ({:?})",
+            chosen.get_info().name,
+            chosen.get_info().device_type
+        );
+        Ok(chosen.clone())
+    }));
     let options = eframe::NativeOptions {
+        renderer: eframe::Renderer::Wgpu,
+        wgpu_options: eframe::egui_wgpu::WgpuConfiguration {
+            wgpu_setup: setup.into(),
+            ..Default::default()
+        },
         viewport: egui::ViewportBuilder::default()
             .with_inner_size([1320., 850.])
             .with_min_inner_size([900., 600.]),

@@ -4,6 +4,9 @@ Native Rust desktop and Windows service, with no Python runtime or Python
 subprocess. The MSVC runtime is linked statically and packaging checks the
 actual executable import tables. This remains an unsigned preview; full RFC
 5905 conformance and seven-day clock-control endurance are still outstanding.
+The desktop uses native Direct3D with a built-in Windows software adapter
+fallback, including server or remote sessions without an OpenGL driver.
+`--software-rendering` explicitly exercises that fallback in launch tests.
 
 ## Clock ownership
 

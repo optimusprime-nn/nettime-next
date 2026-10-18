@@ -5,6 +5,7 @@
 - Replaces settings drafts with validated native service administration and explicit start/stop/import/takeover/restore controls.
 - Adds source comparison, windowed statistics, selection reasons/timeline, recorded-offset plots and CSV/JSON/full-evidence exports.
 - Defaults the native Windows service to automatic observation, protects active ownership during upgrades and restores it before uninstall.
+- Uses Direct3D with the Windows software-rendering adapter so server/remote sessions do not depend on an OpenGL driver; desktop smoke tests wait for actual process exit.
 - Adds failure-injection, comparison-window and UTC tests plus installed Windows administration, watchdog and measured physical clock-response validation.
 
 ## 0.4.0-dev

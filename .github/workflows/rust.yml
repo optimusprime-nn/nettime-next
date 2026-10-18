@@ -16,6 +16,7 @@ jobs:
       - uses: Swatinem/rust-cache@v2
         with:
           workspaces: native -> target
+          cache-on-failure: true
       - uses: actions/setup-python@v5
         with:
           python-version: '3.11'
@@ -26,12 +27,12 @@ jobs:
       - name: Native static analysis
         working-directory: native
         run: cargo clippy --locked --all-targets -- -D warnings
-      - name: Native desktop launch check
-        run: |
-          ./native/target/release/NetTimeNextNative.exe --smoke-ui
-          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
       - name: Native installed service lifecycle
         run: ./native/test-installed.ps1 -Installer ./dist/NetTimeNext-Rust-0.4.1-Preview-Setup-x64.exe
+      - name: Native desktop launch check
+        run: |
+          $desktop = Start-Process ./native/target/release/NetTimeNextNative.exe -ArgumentList '--smoke-ui --software-rendering' -Wait -PassThru
+          if ($desktop.ExitCode -ne 0) { exit $desktop.ExitCode }
       - uses: actions/upload-artifact@v4
         with:
           name: Rust-native-preview-x64

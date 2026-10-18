@@ -23,8 +23,9 @@ if ($service.State -ne 'Running') { throw 'Native service did not run' }
 if ($service.StartName -ne 'NT AUTHORITY\LocalService') { throw 'Unexpected native service identity' }
 Start-Sleep -Seconds 3
 $database=Join-Path $root 'data/history.sqlite3'
+& (Join-Path $PSScriptRoot 'test-takeover.ps1') -Helper $helper -Root $root
 foreach ($screen in @('--smoke-ui','--smoke-settings','--smoke-comparison')) {
-    $arguments="$screen --config `"$(Join-Path $root 'settings.json')`" --database `"$database`""
+    $arguments="$screen --software-rendering --config `"$(Join-Path $root 'settings.json')`" --database `"$database`""
     $desktop=Start-Process -FilePath (Join-Path $app 'NetTimeNextNative.exe') -ArgumentList $arguments -Wait -PassThru
     if ($desktop.ExitCode -ne 0) { throw "Installed native desktop failed: $screen" }
 }
@@ -32,7 +33,6 @@ foreach ($screen in @('--smoke-ui','--smoke-settings','--smoke-comparison')) {
 if ($LASTEXITCODE -ne 0) { throw 'Native export failed' }
 & $helper --compare-export (Join-Path $env:RUNNER_TEMP 'native-comparison') --database $database --days 7
 if ($LASTEXITCODE -ne 0) { throw 'Native comparison export failed' }
-& (Join-Path $PSScriptRoot 'test-takeover.ps1') -Helper $helper -Root $root
 $uninstall=Start-Process -FilePath (Join-Path $app 'unins000.exe') -ArgumentList '/VERYSILENT /SUPPRESSMSGBOXES /NORESTART' -WindowStyle Hidden -Wait -PassThru
 if ($uninstall.ExitCode -ne 0) { throw 'Native uninstall failed' }
 if (Get-Service NetTimeNextNativePreview -ErrorAction SilentlyContinue) { throw 'Native service remains after uninstall' }

@@ -141,6 +141,7 @@ pub fn run() -> Result<()> {
                 "live"
             }
             .into(),
+            args.iter().any(|a| a == "--software-rendering"),
         )
     }
 }
