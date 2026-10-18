@@ -4,12 +4,12 @@ from pathlib import Path
 import tempfile
 import time
 import unittest
-from unittest.mock import patch
+from unittest.mock import patch, Mock
 
 from monitor import validate_config
 from runtime_paths import SERVICE_NAME
 from storage import Store
-from takeover import CONTROLLERS, activate, ownership_guard, read_journal, readiness, rollback
+from takeover import CONTROLLERS, WindowsServices, activate, ownership_guard, read_journal, readiness, rollback
 
 
 class FakeServices:
@@ -50,6 +50,15 @@ class FakeServices:
 
 
 class TakeoverTests(unittest.TestCase):
+    def test_virtual_account_requires_null_password_and_builtin_requires_empty(self):
+        backend = WindowsServices()
+        backend.api = Mock(SERVICE_NO_CHANGE=-1, SERVICE_CHANGE_CONFIG=2)
+        backend.handle = Mock(return_value=Mock())
+        backend.configure(SERVICE_NAME, account='NT SERVICE\\' + SERVICE_NAME)
+        self.assertIsNone(backend.api.ChangeServiceConfig.call_args.args[9])
+        backend.configure(SERVICE_NAME, account='NT AUTHORITY\\LocalService')
+        self.assertEqual(backend.api.ChangeServiceConfig.call_args.args[9], '')
+
     def setUp(self):
         self.temp = tempfile.TemporaryDirectory()
         self.root = Path(self.temp.name)

@@ -77,7 +77,8 @@ class WindowsServices:
         try:
             s.ChangeServiceConfig(handle, s.SERVICE_NO_CHANGE,
                 start_type if start_type is not None else s.SERVICE_NO_CHANGE,
-                s.SERVICE_NO_CHANGE, None, None, 0, None, account, '' if account else None, None)
+                s.SERVICE_NO_CHANGE, None, None, 0, None, account,
+                None if not account or account.casefold().startswith('nt service\\') else '', None)
         finally:
             handle.Close()
 
@@ -163,7 +164,7 @@ def activate(root=None, backend=None):
         raise RuntimeError('NetTime Next service must be running before takeover')
     if own['account'].casefold() not in ('nt authority\\localservice', 'nt service\\' + SERVICE_NAME.casefold()):
         raise RuntimeError('Takeover requires the standard service account; custom accounts are not changed')
-    journal = dict(version=1, phase='prepared', utc=time.time(), own_service=own,
+    journal = dict(version=1, phase='prepared', utc=time.time(), own_service=own, clock_started=False,
                    controllers=[backend.snapshot(name) for name in CONTROLLERS],
                    previous_config=json.loads((root / 'settings.json').read_text(encoding='utf-8-sig')),
                    previous_config_text=(root / 'settings.json').read_bytes().decode('utf-8'),
@@ -183,6 +184,7 @@ def activate(root=None, backend=None):
         cfg['clock']['mode'] = 'slew'
         write_json(root / 'settings.json', cfg)
         journal['phase'] = 'active'
+        journal['clock_started'] = True
         write_json(path, journal)
         backend.change(SERVICE_NAME, True)
         store.event('takeover_active', {'mode': 'slew', 'limits': cfg['clock']})
@@ -207,7 +209,7 @@ def rollback(root=None, backend=None):
     backend.change(SERVICE_NAME, False)
     # Stop also covers interrupted activation before the controller was created.
     from clock_control import WindowsClock
-    if isinstance(backend, WindowsServices):
+    if isinstance(backend, WindowsServices) and journal.get('clock_started', True):
         WindowsClock().restore()
     if 'previous_config_text' in journal:
         config = root / 'settings.json'

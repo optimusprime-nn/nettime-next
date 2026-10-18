@@ -1,4 +1,5 @@
 import copy
+import os
 from pathlib import Path
 import tempfile
 import unittest
@@ -95,6 +96,13 @@ class MitigationTests(unittest.TestCase):
 
 
 class DisciplineTests(unittest.TestCase):
+    @unittest.skipUnless(os.name == 'nt', 'Windows precise API export availability')
+    def test_precise_api_exports_resolve_without_changing_clock(self):
+        from clock_control import precise_api
+        library = precise_api()
+        self.assertTrue(callable(library.GetSystemTimeAdjustmentPrecise))
+        self.assertTrue(callable(library.SetSystemTimeAdjustmentPrecise))
+
     def options(self):
         return validate_config({'servers': [{'host': 'fixture'}]})['clock']
 

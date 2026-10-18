@@ -76,6 +76,6 @@ end;
 function InitializeUninstall(): Boolean;
 begin
   Result := ServiceCommand('remove');
-  if not Result then
+  if (not Result) and (not UninstallSilent) then
     MsgBox('The observer service could not be removed. Uninstall stopped to preserve its files.', mbError, MB_OK);
 end;

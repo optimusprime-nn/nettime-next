@@ -10,6 +10,20 @@ import math
 import time
 
 
+def precise_api():
+    # These APIs are exported by KernelBase/API sets, not kernel32.dll.
+    # Restrict lookup to system libraries; merely resolving exports is read-only.
+    for name in ('api-ms-win-core-sysinfo-l1-2-3.dll', 'kernelbase.dll'):
+        try:
+            library = ctypes.WinDLL(name, use_last_error=True, winmode=0x800)
+            getattr(library, 'GetSystemTimeAdjustmentPrecise')
+            getattr(library, 'SetSystemTimeAdjustmentPrecise')
+            return library
+        except (AttributeError, OSError):
+            continue
+    raise RuntimeError('Windows precise clock-adjustment API is unavailable')
+
+
 class SlewPlanner:
     def __init__(self, options):
         self.options = options
@@ -76,7 +90,7 @@ class WindowsClock:
                 raise PermissionError('Service token does not have permission to adjust system time')
         finally:
             token.Close()
-        self.kernel = ctypes.WinDLL('kernel32', use_last_error=True)
+        self.kernel = precise_api()
         self.kernel.GetSystemTimeAdjustmentPrecise.argtypes = [ctypes.POINTER(ctypes.c_ulonglong), ctypes.POINTER(ctypes.c_ulonglong), ctypes.POINTER(wt.BOOL)]
         self.kernel.GetSystemTimeAdjustmentPrecise.restype = wt.BOOL
         self.kernel.SetSystemTimeAdjustmentPrecise.argtypes = [ctypes.c_ulonglong, wt.BOOL]

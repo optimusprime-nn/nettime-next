@@ -29,6 +29,7 @@ jobs:
       - name: Test and package installer
         run: python build.py --iscc "$env:NETTIME_ISCC"
       - name: Test installed service lifecycle
+        timeout-minutes: 8
         shell: pwsh
         env:
           GH_TOKEN: ${{ github.token }}

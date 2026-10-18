@@ -41,8 +41,19 @@ The fixture supplies no usable time sample and permits no slew.
 - [Cloudflare NTS](https://developers.cloudflare.com/time-services/nts/).
 - [Netnod NTS](https://www.netnod.se/nts/network-time-security).
 
-One read-only live exchange with `time.cloudflare.com` passed TLS 1.3,
-NTS authentication and NTP header/timestamp checks during development. This is
-interoperability evidence, not proof of all failure modes or long-term accuracy.
+Read-only live exchanges with `time.cloudflare.com` and `nts.netnod.se` each
+passed TLS 1.3, certificate identity, NTS authentication and NTP timestamp checks.
+A second exchange after 65 seconds reused each session successfully and restored
+the cookie pool to eight. Both initial key establishment and authenticated cookie
+renewal were exercised against independent implementations. These checks do not
+prove all failure modes or long-term accuracy.
+
+The first real Windows ownership test caught an invalid virtual-account password
+argument and a precise-clock API lookup in kernel32 instead of the API set/KernelBase.
+Both are covered by regression checks. Partial activation now avoids touching the
+clock backend before that backend could have run, and silent uninstall returns
+failure without a blocking dialog if recovery cannot complete.
+
 Unit tests use local TLS/UDP fixtures and fake clocks; drift simulations never
-change host time.
+change host time. The precise API export check resolves functions without calling
+any adjustment API.
