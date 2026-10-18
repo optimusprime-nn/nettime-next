@@ -17,3 +17,4 @@ work/
 VALIDATION.md
 *.spec
 native/target/
+!native/Cargo.lock
