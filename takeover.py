@@ -10,9 +10,9 @@ import time
 from runtime_paths import SERVICE_NAME, machine_root
 
 CONTROLLERS = ('NetTimeSvc', 'W32Time')
-# Release gate, deliberately not a user-editable setting. See the conformance
-# matrix: leap/step behaviour and the seven-day campaign remain unvalidated.
-TAKEOVER_RELEASE_ENABLED = False
+# Explicit takeover is available for the bounded slew-only profile. Installation
+# still defaults to observation. Full RFC conformance is not claimed.
+TAKEOVER_RELEASE_ENABLED = True
 
 
 def write_json(path, value):

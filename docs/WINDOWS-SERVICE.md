@@ -1,4 +1,4 @@
-# Windows service preview 0.3.0
+# Windows service preview 0.3.1
 
 The installer bundles Python and all runtime dependencies. A separate Python
 installation is not required on the destination computer. Windows 10/11 x64 is
@@ -33,13 +33,13 @@ lookup uses the Windows resolver, so stop can wait for an in-flight lookup.
 
 ## Coexistence
 
-This preview remains **measurement only** behind a clock-takeover release gate.
+Installation starts in **measurement mode**. Explicit takeover can enable bounded slew.
 It does not stop the original NetTime/W32Time services or bind UDP 123. NTS
 authentication is now implemented and uses ephemeral UDP ports after TLS key
 establishment. Existing clock controllers continue operating. Source comparison
-and synchronization assessments are recorded without adjusting the clock.
+and synchronization assessments are recorded in either mode.
 See [the validation matrix](SYNCHRONIZATION-PREVIEW.md) for the implemented but
-release-gated controller and ownership/rollback transaction.
+bounded controller and ownership/rollback transaction.
 
 ## Upgrade and uninstall
 
@@ -60,7 +60,7 @@ python build.py --iscc path-to-ISCC.exe
 ```
 
 The build runs tests, creates the app/service executables, includes runtime
-license notices and produces `dist/NetTimeNext-0.3.0-Setup-x64.exe`, a checksum and
+license notices and produces `dist/NetTimeNext-0.3.1-Setup-x64.exe`, a checksum and
 a manifest identifying the source commit. Builds are traceable to source and
 pinned dependencies; byte-for-byte reproducible binaries are not claimed.
 
@@ -72,8 +72,7 @@ overwrite an existing observer installation or settings. Its optional
 
 CI also verifies bundled TLS/AES-SIV/certificate dependencies and, only on
 disposable GitHub-hosted runners, real Windows takeover/virtual-account privilege
-and rollback without usable clock samples. The frozen helper keeps takeover
-locked. Ordinary installer tests never change another clock service.
+and rollback without usable clock samples. The frozen helper requires administrator approval and fresh source agreement. Ordinary installer tests never change another clock service.
 
 This is an unsigned preview. Full NTP conformance and seven-day reliability
 validation remain tracked work; NTS interoperability alone does not establish

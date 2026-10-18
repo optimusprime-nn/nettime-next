@@ -1,4 +1,4 @@
-NetTime Next 0.3.0 — Windows service preview
+NetTime Next 0.3.1 — Windows service preview
 
 This installer adds an automatic Windows service that checks every configured
 NTP/NTS source and retains seven days of measurements and selection evidence.
@@ -7,10 +7,11 @@ Collection continues while the desktop is closed and users are logged out.
 This preview adds source comparisons and authenticated NTS. NTS-required entries
 never fall back to plain NTP. Existing server lists/settings/history are retained.
 
-Clock takeover remains locked while full NTP conformance and seven-day reliability
-validation are outstanding. Your original NetTime remains the clock controller.
-The synchronization assessment logs evidence without changing the clock.
-No local NTP server port is opened. See the validation matrix in the source.
+Installation starts in measurement mode. Explicit administrator-approved takeover
+can enable bounded gradual correction after source agreement and offset checks.
+It saves the previous service states/configuration for rollback. Full NTP conformance
+and seven-day reliability validation remain open. No automatic time steps or local
+NTP server are provided. Existing takeover ownership is preserved by an upgrade.
 
 This preview is unsigned. Installation requires administrator approval.
 Configuration and history remain in ProgramData\NetTimeNext after uninstall.

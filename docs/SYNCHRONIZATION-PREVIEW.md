@@ -1,8 +1,10 @@
 # Synchronization preview: implementation and validation gates
 
-Version 0.3.0 progresses the four agreed work streams. Clock control is
-implemented behind `takeover.TAKEOVER_RELEASE_ENABLED = False`. The shipped
-UI/helper and ordinary settings saves cannot activate takeover.
+Version 0.3.1 enables explicit administrator-approved takeover for the bounded
+slew-only profile, following the user's request to hand over now. Installation
+still starts in observation mode. Source agreement, offset limits, warmup,
+exclusive ownership, rate bounds, holdover and rollback checks remain enforced.
+Full RFC conformance and endurance validation are not claimed complete.
 
 | Requirement | Implementation/evidence | Outstanding gate |
 |---|---|---|
@@ -18,18 +20,13 @@ UI/helper and ordinary settings saves cannot activate takeover.
 | Ownership/rollback | Durable journal, virtual service identity and clock right, NetTimeSvc/W32Time exclusivity, conflict watchdog, partial-failure recovery | Other controllers, domain/group-policy, forced-kill and reboot recovery |
 | Installation | Upgrade/read-only history checks, packaged TLS/CA check, disposable Windows ownership/privilege fixture | Windows 10/11 clean-machine matrix; signing |
 
-Do not change the takeover release gate until the outstanding NTP profile and
-endurance checks are reviewed and their evidence committed. Unit tests and NTS
-interoperability alone do not establish complete RFC 5905 conformance. The legacy
-diagnostic recommendation remains separate from the synchronization assessment.
-
-No clock adjustment/ownership change is performed on the user's PC to validate
-this preview. The disposable CI fixture requires GitHub-hosted runner markers
-and reserved `.invalid`, NTS-only fixture sources. It overrides the release gate
-only in the guarded source test process to exercise the actual Windows account,
-clock privilege and neutral backend startup, then restores service states and
-the exact configuration bytes. The frozen helper keeps its release gate locked.
-The fixture supplies no usable time sample and permits no slew.
+Unit tests and NTS interoperability do not establish complete RFC 5905 conformance.
+The legacy diagnostic recommendation remains separate from the synchronization
+assessment. The real Windows CI fixture verifies the frozen takeover command,
+virtual service identity and clock permission, a bounded 1 ppm API/readback test,
+and exact rollback. It runs only on disposable GitHub-hosted runners.
+The user explicitly authorized live takeover on 2026-10-17; the service will use
+bounded slew only, with saved rollback state. No automatic clock steps are enabled.
 
 ## Standards and interoperability
 

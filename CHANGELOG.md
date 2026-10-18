@@ -1,5 +1,12 @@
 # Change history
 
+## 0.3.1 — Explicit bounded clock takeover
+
+- Enable administrator-approved clock takeover on the user's explicit request. Installation still defaults to observation; source agreement, freshness, warmup, offset/rate bounds, exclusive ownership and rollback remain enforced.
+- Expose synchronization and actual correction evidence in the service health command.
+- Test the frozen takeover command and a bounded Windows rate/readback call on the disposable CI runner, followed by exact rollback.
+- Full RFC conformance, leap/step behaviour and endurance validation remain outstanding; this profile performs gradual correction only.
+
 ## 0.3.0 — Source comparison, authenticated NTS and synchronization assessment
 
 - Compare 24-hour, seven-day or retained evidence: valid attempts, coverage/gaps, median/P95 offsets and RTT, PC offset variation, stratum changes, authentication and selection duration/reasons. Export comparison JSON/CSV and selection changes.

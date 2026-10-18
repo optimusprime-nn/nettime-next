@@ -71,7 +71,7 @@ def main():
                     sha256=hashlib.sha256(setup.read_bytes()).hexdigest(),
                     source_commit=subprocess.check_output(["git", "rev-parse", "HEAD"], cwd=ROOT, text=True).strip(),
                     source_dirty=bool(subprocess.check_output(["git", "status", "--porcelain", "--untracked-files=no"], cwd=ROOT, text=True)),
-                    mode="measurement-only Windows service; NTS and shadow mitigation; takeover release-gated", signed=False,
+                    mode="Windows service; NTS and explicit bounded slew takeover; observe by default", signed=False,
                     desktop_dpi_awareness="PerMonitorV2")
     (ROOT / "dist" / "build-manifest.json").write_text(json.dumps(manifest, indent=2) + "\n", encoding="utf-8")
     (ROOT / "dist" / "SHA256SUMS.txt").write_text(f"{manifest['sha256']}  {setup.name}\n", encoding="utf-8")

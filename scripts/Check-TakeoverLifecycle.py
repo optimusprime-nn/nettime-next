@@ -38,11 +38,7 @@ def main():
     store.save_cycle(store.next_cycle(), [], prepared, {}, prepared['utc'])
     exe = Path(sys.argv[1])
     try:
-        # Override the release gate only in this guarded source test process.
-        # The installed UI/helper retains its locked release gate.
-        from takeover import activate
-        with patch('takeover.TAKEOVER_RELEASE_ENABLED', True):
-            activate(root, backend)
+        subprocess.run([str(exe), 'takeover'], check=True)
         assert read_journal(root)['phase'] == 'active'
         own = backend.snapshot(SERVICE_NAME)
         assert own['running'] and own['account'].casefold() == ('NT SERVICE\\' + SERVICE_NAME).casefold(), own
@@ -61,6 +57,15 @@ def main():
             time.sleep(.2)
         assert started, 'Virtual service account did not initialize its clock backend'
         assert all(json.loads(p[0])['action'] != 'slew' for p in slewed), 'Fixture unexpectedly steered the clock'
+        # Exercise the actual rate/readback API on this disposable runner only.
+        # Neutralize immediately; no usable sample is supplied to the service.
+        from clock_control import WindowsClock
+        clock = WindowsClock()
+        try:
+            applied = clock.rate(1.0)
+            assert abs(applied - 1.0) < .2, applied
+        finally:
+            clock.restore()
     finally:
         subprocess.run([str(exe), 'rollback'], check=True)
     assert read_journal(root)['phase'] == 'rolled_back'
@@ -69,7 +74,7 @@ def main():
     assert (root / 'settings.json').read_bytes() == config_before
     assert not backend.privilege(None)
     assert store.latest_decision()[1] is not None
-    print('PASS: real service takeover, dedicated virtual-account clock privilege, no slew without samples, exact rollback of service states/config; history retained')
+    print('PASS: real takeover/virtual-account privilege, bounded rate API/readback, no service slew without samples, exact service/config rollback; history retained')
 
 
 if __name__ == '__main__':

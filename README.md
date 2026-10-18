@@ -1,14 +1,14 @@
-# NetTime Next — Windows service preview 0.3.0
+# NetTime Next — Windows service preview 0.3.1
 
 NetTime Next checks every configured NTP/NTS source and retains at least seven
 days of measurements and selection evidence. The service collects while the
-desktop is closed or users are logged out. The original NetTime continues
-controlling the PC clock: **clock takeover is locked in this preview** while
-full conformance and endurance validation remain outstanding.
+desktop is closed or users are logged out. Installation starts in measurement mode. Explicit administrator-approved takeover
+can enable bounded gradual correction. Full conformance and endurance validation
+remain outstanding; this is a slew-only preview, not a complete RFC implementation.
 
 ## Install and upgrade
 
-Run `NetTimeNext-0.3.0-Setup-x64.exe`. Python is bundled. Windows 10/11 x64 is the
+Run `NetTimeNext-0.3.1-Setup-x64.exe`. Python is bundled. Windows 10/11 x64 is the
 target; installation needs administrator approval. Install over the existing
 version to preserve configured servers, settings and history. Installation does
 not stop the original NetTime or Windows Time services. This preview is unsigned.
@@ -93,11 +93,12 @@ NetTimeSvc/W32Time startup/running states and this application's configuration,
 uses a dedicated virtual service account and grants only that identity clock
 permission. Rollback restores saved settings/service states and retains history.
 
-**Takeover is disabled by a code release gate**, not a user-editable option.
-The ownership/privilege path is exercised on disposable CI runners without usable
-clock samples. Full NTP conformance, leap/step/state-machine validation and the
-seven-day reliability campaign remain open. This build must not be described as
-a complete RFC 5905 synchronization implementation.
+**Takeover requires an explicit action and administrator approval** in Settings
+or the service helper. It requires fresh agreement from three configured source
+groups and an offset within the 128 ms limit. Installation and settings saves do
+not activate correction. Restore previous controller returns saved service states
+and configuration. The seven-day campaign and full RFC conformance remain open.
+No clock steps are supported; leaps and large errors suspend correction.
 
 ## Run and build from source
 

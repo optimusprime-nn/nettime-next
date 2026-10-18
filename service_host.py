@@ -129,7 +129,9 @@ def main():
         print(json.dumps({"service": query_status(), "version": VERSION,
                           "latest_decision_utc": decision["utc"] if decision else None,
                           "servers": len(decision["servers"]) if decision else 0,
-                          "mode": load_config(root / "settings.json")["clock"]["mode"]}))
+                          "mode": load_config(root / "settings.json")["clock"]["mode"],
+                          "synchronization": decision.get('synchronization') if decision else None,
+                          "clock_action": decision.get('clock_action') if decision else None}))
     elif args.command == "install":
         install()
     elif args.command == "apply-config":
