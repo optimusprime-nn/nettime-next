@@ -1,7 +1,7 @@
-"""Read-only NTPv4 unicast measurements. No clock setting APIs exist here.
+"""NTP unicast measurement transport. NTS-required requests use nts.py.
 
-This is a restricted unauthenticated base-header observer, not a complete
-RFC 5905 synchronization implementation. Unsupported extensions/MACs fail closed.
+Plain NTP accepts only base headers; unsupported extensions/MACs fail closed.
+Clock mitigation and the release-gated controller are separate modules.
 """
 from __future__ import annotations
 
@@ -91,6 +91,14 @@ class Sample:
     kod: str = ""
     security_mode: str = "plain_ntp"
     authentication_status: str = "unauthenticated"
+    remote_port: int | None = None
+    nts_ke_host: str = ""
+    nts_ke_port: int | None = None
+    tls_version: str = ""
+    nts_key_exchange: str = ""
+    nts_session_age_seconds: float | None = None
+    nts_cookie_count: int | None = None
+    certificate_sha256: str = ""
 
     def data(self):
         return asdict(self)
@@ -153,13 +161,16 @@ def parse_reply(raw: bytes, request_stamp: bytes, sample: Sample) -> Sample:
 
 
 def query(host: str, port: int, timeout: float, poll_seconds: float, cycle: int = 0,
-          security_mode: str = "plain_ntp") -> Sample:
+          security_mode: str = "plain_ntp", nts_client=None, ke_port=4460) -> Sample:
+    if security_mode == "nts_required":
+        from nts import query_nts
+        return query_nts(host, port, timeout, poll_seconds, cycle, nts_client, ke_port)
     sample = Sample(host, port, utc_now(), time.perf_counter())
     sample.security_mode = security_mode
     if security_mode != "plain_ntp":
         sample.status = "security_blocked"
         sample.authentication_status = "not_attempted"
-        sample.reason = "NTS required: unavailable in this observer; no request sent and no fallback allowed"
+        sample.reason = "Unknown security policy; no request sent"
         return sample
     try:
         addresses = socket.getaddrinfo(host, port, type=socket.SOCK_DGRAM)

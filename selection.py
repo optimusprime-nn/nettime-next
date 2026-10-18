@@ -57,7 +57,7 @@ class Peer:
                           observer_precision_guard_ms=max(1, precision_ms),
                           client_offset_variation_ms=jitter)
         distance = sum(components.values())
-        value = dict(peer=self.key, address=best.address, port=self.port,
+        value = dict(peer=self.key, address=best.address, port=best.remote_port or self.port,
                      offset_ms=best.offset_ms, delay_ms=best.delay_ms,
                      stratum=best.stratum, jitter_ms=jitter, distance_ms=distance,
                      filter_samples=len(usable), sample_age_seconds=age,

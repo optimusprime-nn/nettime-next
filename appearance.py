@@ -60,6 +60,8 @@ class Appearance:
         for name in ("TFrame", "TLabel", "Title.TLabel", "TNotebook"):
             style.configure(name, background=p["bg"], foreground=p["text"])
         style.configure("Warning.TLabel", foreground=p["warning"])
+        style.configure('TCheckbutton', background=p['bg'], foreground=p['text'], indicatorbackground=p['field'])
+        style.map('TCheckbutton', background=[('active', p['bg'])], foreground=[('disabled', p['muted'])])
         for name in ("TButton", "TNotebook.Tab", "Treeview.Heading", "TScrollbar"):
             style.configure(name, background=p["field"], foreground=p["text"], arrowcolor=p["text"])
             style.map(name, background=[("active", p["selected"]), ("selected", p["selected"])],

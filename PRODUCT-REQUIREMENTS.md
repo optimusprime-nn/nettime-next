@@ -105,6 +105,11 @@ Version 0.2.0 adds a bundled Windows installer, automatic Windows service,
 LocalService identity with restricted data permissions, read-only desktop service
 view, elevated settings application, upgrades/uninstall and Windows build CI.
 
-Not implemented: NTS exchange/authentication, full NTP mitigation/discipline,
-clock adjustment, local NTP serving, digital signing and interoperability
-certification. The installable preview is measurement-only.
+Version 0.3.0 adds the source comparison dashboard/export, RFC 8915 client
+transport and a separately logged NTP mitigation assessment. It implements a
+bounded slew controller and durable ownership/rollback transaction, but the
+release gate prevents takeover until the conformance/endurance checks pass.
+
+Still outstanding: full NTP conformance (including leap/step/state-machine
+validation), week-long recovery/endurance campaign, signed releases and local
+NTP serving. See docs/SYNCHRONIZATION-PREVIEW.md for requirements-to-test status.

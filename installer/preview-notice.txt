@@ -1,16 +1,16 @@
-NetTime Next 0.2.4 — Windows service preview
+NetTime Next 0.3.0 — Windows service preview
 
-This installer adds a separate, automatically starting Windows service named
-NetTimeNext. It measures every configured NTP source and keeps seven days of
-evidence while the desktop window is closed and users are logged out.
+This installer adds an automatic Windows service that checks every configured
+NTP/NTS source and retains seven days of measurements and selection evidence.
+Collection continues while the desktop is closed and users are logged out.
 
-It does not change the PC clock, stop the original NetTime service, or open an
-NTP server port. Your existing NetTime remains the clock controller.
+This preview adds source comparisons and authenticated NTS. NTS-required entries
+never fall back to plain NTP. Existing server lists/settings/history are retained.
 
-NTS authentication and full NTP synchronization conformance remain pending.
-Plain NTP measurements are labelled unauthenticated. NTS-required entries
-are blocked rather than sent as plain requests.
+Clock takeover remains locked while full NTP conformance and seven-day reliability
+validation are outstanding. Your original NetTime remains the clock controller.
+The synchronization assessment logs evidence without changing the clock.
+No local NTP server port is opened. See the validation matrix in the source.
 
-This preview is not digitally signed. Installation requires administrator
-approval. Configuration and history live in ProgramData\NetTimeNext and are
-preserved by upgrades and uninstall.
+This preview is unsigned. Installation requires administrator approval.
+Configuration and history remain in ProgramData\NetTimeNext after uninstall.

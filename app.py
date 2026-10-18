@@ -94,8 +94,10 @@ def gui(cfg, store, smoke=False, config_path=BASE / "settings.json", service_vie
             messagebox.showerror("Appearance could not be saved", str(exc), parent=root)
 
     theme_picker.bind("<<ComboboxSelected>>", change_theme)
-    ttk.Label(outer, text="MEASUREMENT ONLY  ·  Existing NetTime controls your clock  ·  " +
-              ("Windows service collects while this window is closed" if service_view else "Seven-day rolling evidence")).pack(anchor="w", pady=(4, 16))
+    mode_description = tk.StringVar(value="MEASUREMENT ONLY | Clock takeover is off | Seven-day rolling evidence")
+    ttk.Label(outer, textvariable=mode_description).pack(anchor="w", pady=(4, 12))
+    sync_status = tk.StringVar(value="Synchronization assessment: waiting for fresh evidence")
+    ttk.Label(outer, textvariable=sync_status, wraplength=1240).pack(anchor="w", pady=(0, 8))
     summary = tk.StringVar(value="Waiting for measurements from every configured server…")
     ttk.Label(outer, textvariable=summary, wraplength=1240, font=("Segoe UI", 11, "bold")).pack(anchor="w")
     explanation = tk.StringVar(value="Recommendations are experimental; no system clock changes are made.")
@@ -136,6 +138,10 @@ def gui(cfg, store, smoke=False, config_path=BASE / "settings.json", service_vie
     canvas = tk.Canvas(history_panel, bg="white", highlightthickness=0, height=190)
     canvas.pack(fill="both", expand=True)
     ttk.Label(history_panel, text="Offset = server minus this PC (positive means PC is behind). History labels use UTC. Gaps break the line.").pack(anchor="w", pady=(7, 0))
+
+    from comparison import add_dashboard
+
+    refresh_comparison = add_dashboard(tabs, store, cfg)
     details = ScrolledText(details_panel, font=("Consolas", 10), wrap="word", relief="flat")
     details.pack(fill="both", expand=True)
 
@@ -216,7 +222,11 @@ def gui(cfg, store, smoke=False, config_path=BASE / "settings.json", service_vie
         if folder:
             try:
                 store.export(folder)
-                messagebox.showinfo("Export complete", "Saved samples.csv, decisions.csv and events.csv\n" + folder)
+                from comparison import build_report, export_report
+
+                export_report(build_report(store), folder)
+
+                messagebox.showinfo("Export complete", "Saved raw evidence and seven-day comparison reports\n" + folder)
             except Exception as exc:
                 messagebox.showerror("Export failed", str(exc))
 
@@ -292,6 +302,18 @@ def gui(cfg, store, smoke=False, config_path=BASE / "settings.json", service_vie
                 kind, payload = messages.get_nowait()
                 if kind == "cycle":
                     last = payload
+
+                    mode_description.set("GRADUAL CLOCK CORRECTION · NetTime Next owns the clock" if payload.get('clock_mode') == 'slew' else
+
+                                         "MEASUREMENT ONLY · Clock takeover is off · Windows service retains evidence while this window is closed")
+
+                    sync = payload.get('synchronization', {})
+
+                    action = payload.get('clock_action', {})
+
+                    sync_status.set("Synchronization: " + sync.get('explanation', 'Available after upgrading the service') +
+
+                                    " · " + action.get('reason', 'Clock control off'))
                     summary.set(f"Recommended source: {payload['selected'] or 'none'}  ·  {payload['confidence']}")
                     explanation.set(payload["explanation"])
                     details.configure(state="normal")
@@ -310,9 +332,11 @@ def gui(cfg, store, smoke=False, config_path=BASE / "settings.json", service_vie
                             number(c.get("distance_ms")), number(c.get("sample_age_seconds")),
                             server["reach_octal"], s.get("reference_id", "—"),
                             s.get("leap") if s.get("leap") is not None else "—",
-                            "NTS blocked" if s.get("security_mode") == "nts_required" else "Unauthenticated", ""))
+                            "NTS authenticated" if s.get("authentication_status") == "authenticated" else "NTS failed" if s.get("security_mode") == "nts_required" else "Unauthenticated", ""))
                     status.set(f"Last cycle {utc(payload['utc'])}  ·  {len(payload['servers'])} configured sources  ·  History saved")
                     draw_history()
+
+                    refresh_comparison()
                 elif kind == "error":
                     status.set(payload)
                     messagebox.showerror("Monitoring stopped", payload)
@@ -363,12 +387,19 @@ def main():
     parser.add_argument("--once", action="store_true", help="One due measurement cycle; no clock changes")
     parser.add_argument("--headless", action="store_true", help="Continuous foreground collector without GUI")
     parser.add_argument("--export", type=Path, metavar="FOLDER")
+
+    parser.add_argument("--report", type=Path, metavar="FOLDER", help="Export seven-day server comparison and selection timeline")
     parser.add_argument("--smoke-ui", action="store_true", help=argparse.SUPPRESS)
     parser.add_argument("--service-view", action="store_true", help="Read the installed Windows service without starting another collector")
     parser.add_argument("--standalone", action="store_true", help="Run an independent development collector")
     parser.add_argument("--version", action="version", version=VERSION)
     parser.add_argument("--dpi-report", type=Path, help=argparse.SUPPRESS)
+    parser.add_argument("--nts-report", type=Path, help=argparse.SUPPRESS)
     args = parser.parse_args()
+    if args.nts_report:
+        from nts import diagnostics
+        args.nts_report.write_text(json.dumps(diagnostics(), indent=2), encoding='utf-8')
+        return
     if args.dpi_report:
         from ui_dpi import diagnostics
         args.dpi_report.write_text(json.dumps(diagnostics(), indent=2), encoding="utf-8")
@@ -379,6 +410,16 @@ def main():
         args.data_dir = machine_root() / "data"
     cfg = load_config(args.config)
     store = Store(args.data_dir / "history.sqlite3", cfg["retention_days"], read_only=service_view)
+
+    if args.report:
+
+        from comparison import build_report, export_report
+
+        export_report(build_report(store), args.report)
+
+        print(args.report)
+
+        return
     if args.export:
         print(store.export(args.export))
         return

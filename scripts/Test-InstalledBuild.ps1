@@ -60,6 +60,12 @@ try {
     $dpi = Get-Content -LiteralPath $dpiReport -Raw | ConvertFrom-Json
     if (-not $dpi.per_monitor_v2 -or [Math]::Abs($dpi.window_dpi - $dpi.tk_pixels_per_inch) -ge 2) { throw 'Windows and desktop DPI awareness disagree' }
     Write-Output ('Native DPI rendering: ' + ($dpi | ConvertTo-Json -Compress))
+    $ntsReport = Join-Path $env:TEMP 'nettime-nts-report.json'
+    $ntsTest = Start-Process -FilePath $desktop -ArgumentList @('--nts-report', "`"$ntsReport`"") -WindowStyle Hidden -Wait -PassThru
+    if ($ntsTest.ExitCode -ne 0) { throw 'Packaged NTS dependency check failed' }
+    $nts = Get-Content -LiteralPath $ntsReport -Raw | ConvertFrom-Json
+    if (-not $nts.tls13 -or -not $nts.aes_siv -or -not $nts.ca_bundle_exists -or -not $nts.certificate_identity_verification -or $nts.plaintext_fallback) { throw 'Packaged NTS capabilities are incomplete' }
+    Write-Output ('NTS dependencies: ' + ($nts | ConvertTo-Json -Compress))
     $upgradedHealth = & $helper health | ConvertFrom-Json
     if ($upgradedHealth.latest_decision_utc -lt $health.latest_decision_utc -or $upgradedHealth.servers -lt 1) { throw 'Upgrade lost existing measurement evidence' }
     & python (Join-Path $PSScriptRoot 'Check-ServiceReader.py')
@@ -73,6 +79,10 @@ try {
     $currentService = Get-CimInstance Win32_Service -Filter "Name='$serviceName'"
     if ($currentService.StartName -ne 'NT AUTHORITY\LocalService') { throw 'Unexpected service account' }
     if ($currentService.StartMode -ne 'Auto') { throw 'Service startup is not automatic' }
+    if ($env:GITHUB_ACTIONS -eq 'true' -and $env:RUNNER_ENVIRONMENT -eq 'github-hosted' -and -not $ConfigPath) {
+        & python (Join-Path $PSScriptRoot 'Check-TakeoverLifecycle.py') $helper
+        if ($LASTEXITCODE -ne 0) { throw 'Clock ownership takeover/rollback integration check failed' }
+    }
     $keep = $KeepInstalled.IsPresent
     Write-Output 'PASS: install, automatic startup, fresh evidence, stop/start, upgrade and original-service coexistence.'
 } finally {

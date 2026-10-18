@@ -1,177 +1,123 @@
-# NetTime Next — Windows service preview 0.2.4
+# NetTime Next — Windows service preview 0.3.0
 
-This first working build monitors every configured time source while the existing
-NetTime service continues controlling the PC clock. It cannot change the clock.
-It is **not yet a complete RFC 5905 synchronization engine**, and **NTS is not
-implemented**. Its source recommendation is explicitly experimental.
+NetTime Next checks every configured NTP/NTS source and retains at least seven
+days of measurements and selection evidence. The service collects while the
+desktop is closed or users are logged out. The original NetTime continues
+controlling the PC clock: **clock takeover is locked in this preview** while
+full conformance and endurance validation remain outstanding.
 
-## Install the Windows build
+## Install and upgrade
 
-Run `NetTimeNext-0.2.4-Setup-x64.exe` and approve Windows elevation. Python does
-not need to be installed on the destination computer. The installer adds the
-automatically starting **NetTime Next Observer** Windows service and a desktop
-app accessible from the Start menu. The original NetTime service is not changed.
+Run `NetTimeNext-0.3.0-Setup-x64.exe`. Python is bundled. Windows 10/11 x64 is the
+target; installation needs administrator approval. Install over the existing
+version to preserve configured servers, settings and history. Installation does
+not stop the original NetTime or Windows Time services. This preview is unsigned.
 
-The service collects while the window is closed and users are logged out.
-The desktop reads its history without starting another collector. Configuration
-and history are stored in `ProgramData\NetTimeNext`; upgrades and uninstall
-preserve them. The service runs as LocalService with access restricted to its
-own writable data directory. Saving service settings requests administrator
-approval and restarts the observer service. This preview installer is unsigned.
+The automatic delayed-start `NetTimeNext` Windows service runs as LocalService
+with a service-specific writable data directory. The desktop reads evidence
+without starting another collector. Machine configuration and evidence live in
+`ProgramData\NetTimeNext`; ordinary users can read them but cannot write them.
+Saving service settings requests elevation and restarts this application's service.
+Dark mode and native high-DPI rendering remain standard. The Light/Dark selector
+saves a per-user preference without restarting the service.
 
-See [Windows service deployment and build details](docs/WINDOWS-SERVICE.md).
+## Source comparison
 
-The desktop opens in dark mode. Use Appearance at the top right to switch to Light; this per-user preference does not restart the service. Settings, tables, charts and decision evidence follow the selected appearance.
+Open **Source comparison** for 24-hour, seven-day or all-retained summaries:
 
-Version 0.2.3 enables native high-DPI desktop rendering and scales pixel layout
-metrics alongside fonts. Existing installations can be upgraded directly while
-preserving settings and recorded history.
+- Successful recorded attempts, first-to-last coverage and longest attempt gaps.
+- Median offset, P95 absolute offset, median/P95 RTT and PC offset standard deviation.
+- Stratum range/changes, authenticated-valid percentage, selected duration and reasons.
+- Selection changes with the recorded reason for each change.
 
-Upgrading from 0.2.0 fixes the read-only database startup error. Install over the
-existing version; the installer stops/restarts its own service and migrates the
-database without clearing history or changing your configured servers.
+Valid-attempt percentage is not continuous uptime. Coverage includes gaps;
+missing time is not backfilled. Selected durations expire after three selected-source
+poll intervals so stale evidence does not credit service downtime. Offset variation
+includes PC drift and corrections; it is not physical PPS jitter. A full week
+accumulates over time. Retention defaults to seven days and cannot be set lower.
 
-## Run from source
+**Export evidence** saves raw `samples.csv`, `decisions.csv`, `events.csv` from
+one snapshot, plus `comparison.json`, `comparison.csv` and `selection-changes.csv`
+from a separate comparison snapshot. Structured JSON inside CSV preserves full
+decision/event evidence. Timestamps and graph labels use UTC. Exports are not
+removed by rolling retention. Cleanup runs hourly and pauses after clock jumps.
 
-Double-click **Launch NetTime Next.cmd**. Python 3.11 with Tk is already present
-on this machine; no additional packages are required. Keep the application open
-to accumulate history in standalone source mode. Closing a **standalone** window
-stops its collector; closing the **installed service** window does not. The
-development launcher uses this machine's Python path with `python` as a fallback.
-On another development machine, copy `settings.example.json` to `settings.json`
-and run `python app.py`. Live settings/logs are excluded from Git.
+## NTP and NTS sources
 
-The local development settings match the supplied screenshots:
+Every entry is checked at a default 64-second interval. RATE responses slow
+polling; DENY/RSTR stop associations. Restrictions survive restarts. Failed sources
+stay visible. Requests use ephemeral UDP ports; no local NTP server is installed.
 
-- `192.0.2.54:123`
-- `192.0.2.62:123`
-- `time-a-b.nist.gov:123`
-- `time-b-b.nist.gov:123`
+In **Settings → Servers**, enter a host, port and security policy, use **Add server**
+or **Replace selected**, then **Save & restart service**.
 
-Every server is checked at a default 64-second interval, concurrently. Server
-RATE responses slow its polling, and DENY/RSTR stop its association. Restrictions
-persist across restarts. There is no first-success shortcut and no automatic
-removal of a failed source. DNS answers rotate between checks; each measurement
-records the address actually contacted.
+- Plain NTP is unauthenticated; unsupported extensions/MACs fail closed.
+- NTS required uses TLS 1.3, certificate/hostname validation, ALPN, exporter-derived
+  AES-SIV keys and authenticated NTP. Failures never fall back to plain NTP.
+- NTS-KE normally uses TCP 4460. Its authenticated negotiation chooses the actual
+  NTP endpoint/port; the configured NTP port identifies the configured entry.
+- **Fill NTS example** fills `time.cloudflare.com`, NTS required and group
+  `cloudflare`; review and add it before saving. Existing server lists are not
+  changed automatically. Netnod publishes `nts.netnod.se` as another NTS endpoint.
+- Trust uses bundled Mozilla CA roots. The PC date must permit certificate
+  validation; validation is never disabled. Private CA configuration is not provided.
+- Cookies are replenished and sessions renewed daily. Secrets stay in memory;
+  restart performs fresh key establishment. Retry backoff survives restarts.
+  NTS packet evidence contains only the 48-byte header; no keys or reusable cookies
+  are logged/exported. Certificate fingerprints, auth outcomes, renewal/reuse status
+  and session age are recorded.
 
-## Settings
+## Synchronization assessment and release gate
 
-The redesigned settings window separates **Servers**, **Security & NTS**,
-**Polling**, **Clock correction**, and **History & logs**. Source mode saves for
-restart; the installed app applies settings through its service helper. Editing a server requires **Replace selected**;
-adding requires **Add server**, followed by **Save for restart**.
+The existing diagnostic recommendation remains visible for continuity. It uses
+minimum RTT and interval-overlap consensus; it is not the clock controller. Latest
+measurements and ranking samples remain distinct, with score components. See the
+[TS1/Raspberry Pi audit](docs/SELECTION-AUDIT.md).
 
-- Plain NTP is explicitly labelled **unauthenticated**, in both UI and logs.
-- **NTS required** can be reserved per server, but in this build it blocks that
-  entry from sending requests. It does not emulate authentication or fall back.
-- The NTS page describes the missing RFC 8915 implementation, including TLS key
-  establishment and authenticated NTP packets. Server support is not assumed.
-- Clock correction is informational and disabled in this observer, including
-  when it runs as a Windows service.
-- Retention defaults to seven days and cannot be set below seven.
+A separate synchronization assessment now logs eight-stage filtering, aged
+dispersion, correctness-interval intersection, clustering and inverse-distance
+combination. Candidates, exclusions, survivor weights and cluster removals are
+in **Full decision evidence**. This assessment does not change the clock.
 
-## Measurements and evidence
+Assign an **independent source group** to participate. Shared upstream/provider
+means the same group: both NIST endpoints should share `nist`. Distinct IPs,
+GPS/PPS reference IDs and stratum 1 do not prove independence. Unassigned sources
+remain monitored but do not vote. At least three groups and four fresh filter
+samples are required. A separate policy can require NTS for all steering sources.
 
-The table shows stratum, offset, round-trip delay, filtered jitter, reachability,
-reference ID, leap indicator, security and the next scheduled check. Select a
-server for its history graph and current selection/rejection reason. Full
-decision evidence is available in the second tab.
+The implemented slew planner estimates oscillator error, requires three new
+system-peer filter samples, caps rate at 250 ppm by default (hard maximum 500),
+and suspends above 128 ms offset, on stale evidence, lost consensus, leap notices
+or competing clock services. It never steps time. The ownership transaction saves
+NetTimeSvc/W32Time startup/running states and this application's configuration,
+uses a dedicated virtual service account and grants only that identity clock
+permission. Rollback restores saved settings/service states and retains history.
 
-**Positive offset means the server is ahead of this PC.** These are measurements
-relative to a clock still disciplined by the current NetTime service. They do
-not establish the PC's natural oscillator drift. A reference ID is the server's
-advertised identifier, not necessarily a usable upstream hostname. LI values 1/2
-announce leap events; LI 3 reports an unsynchronized server.
+**Takeover is disabled by a code release gate**, not a user-editable option.
+The ownership/privilege path is exercised on disposable CI runners without usable
+clock samples. Full NTP conformance, leap/step/state-machine validation and the
+seven-day reliability campaign remain open. This build must not be described as
+a complete RFC 5905 synchronization implementation.
 
-`ProgramData\NetTimeNext\data\history.sqlite3` in service mode, or local
-`data/history.sqlite3` in source mode, stores every attempt (including failures), parsed reply
-metadata and raw base-header request/reply bytes; timestamps T1–T4; resolved
-endpoint; stratum; security mode; offset and delay; root delay and dispersion;
-server control messages; diagnostic candidate metrics; all source reasons;
-selection changes; configuration and clock-discontinuity events. Each decision
-links to its measurement cycle and identifies the policy version. Jitter is a
-filter statistic in the decision record, not a packet field.
+## Run and build from source
 
-Seven days of history **accumulate over time**; a new installation does not
-already contain a week of data. Downtime produces gaps. Retention cleanup runs
-hourly while collecting; the database can contain slightly more than seven days.
-Clock discontinuities delay cleanup to avoid prematurely losing evidence.
-Exports are not automatically deleted by rolling retention. SQLite pages may
-remain allocated after older rows are removed.
-
-**Export evidence** saves `samples.csv`, `decisions.csv` and `events.csv` from one
-database snapshot. Decision/event payloads preserve structured JSON inside CSV.
-All persisted timestamps are Unix UTC; graph labels show ISO UTC. No credentials
-or NTS keys/cookies are logged. Data remains local.
-
-## Diagnostic recommendation, not clock control
-
-Version 0.2.2 explicitly separates the latest displayed measurement from the
-minimum-RTT ranking sample. Select a source to inspect both epochs and the full
-score breakdown. "Client variation" includes Windows clock drift/corrections;
-it is not a physical PPS-jitter measurement. See the matching recorded
-[TS1 / Raspberry Pi selection audit](docs/SELECTION-AUDIT.md).
-
-The observer filters up to eight recent valid samples using minimum round-trip
-delay, estimates jitter and uncertainty, rejects stale/overly uncertain sources,
-and looks for a unique majority of overlapping offset uncertainty intervals. It
-then recommends the lowest estimated distance among agreeing sources. Stratum
-is recorded and used only as a later tie-break, not as proof of accuracy.
-
-A single candidate is labelled uncorroborated. Conflicting sources can produce
-no recommendation. Aliases resolving to the same endpoint do not receive extra
-votes. Distinct endpoints do **not** prove independent clocks; the two NIST
-entries and the local devices may share upstream references. The complete RFC
-selection, cluster, combine and clock-discipline pipeline remains a separate
-implementation and validation task. This diagnostic policy must not be passed
-off as that implementation.
-
-The observer checks packet size, version, mode, matching originate timestamp,
-stratum, leap status and timestamp consistency. Connected UDP limits replies to
-the requested endpoint, and client sockets use ephemeral ports. It handles the
-2036 era rollover assuming the local date is within 68 years of the real date.
-High-resolution steady timing separates network elapsed time from local clock
-steps; affected cycles are discarded. This does not detect every tiny clock
-change or distinguish which program changed the clock.
-
-Extensions and MACs are deliberately rejected as unsupported rather than
-silently ignored. Replies are unauthenticated; header checks do not provide
-cryptographic server authentication. See **Security & NTS**.
-
-## Command-line operation
-
-From this folder:
+Use Python 3.11 x64 with Tk on Windows and install pinned dependencies:
 
 ```text
+python -m pip install -r requirements-build.txt
+python app.py --service-view
 python app.py --once
 python app.py --headless
-python app.py --export path-to-export-folder
+python app.py --report path-to-report-folder
+python app.py --export path-to-raw-export-folder
 python -m unittest discover -s . -p "test_*.py" -v
 ```
 
-`python app.py --service-view` connects a source checkout to the installed
-service; this requires pywin32. Frozen desktop builds use service view by default.
-`--standalone` explicitly requests an independent development collector.
+Copy `settings.example.json` to `settings.json` for standalone collection. Source
+mode never activates correction. Frozen desktop builds use service view by default;
+`--standalone` requests a development collector. One collector may use a data
+directory at a time. Live settings, databases and secrets are excluded from Git.
 
-`--once` honors persisted polling restrictions and can report that no checks are
-due. `--headless` collects continuously until stopped; it is not an installed
-background service. The installer provides the managed Windows service instead.
-Use `--data-dir` for an alternative standalone database directory.
-One collector may use a data directory at a time.
-
-## Standards and next release gates
-
-- [RFC 5905 — NTPv4](https://www.rfc-editor.org/rfc/rfc5905.html)
-- [RFC 8633 — operational best practices](https://www.rfc-editor.org/rfc/rfc8633.html)
-- [RFC 9109 — client port randomization](https://www.rfc-editor.org/rfc/rfc9109.html)
-- [RFC 8915 — NTS](https://www.rfc-editor.org/rfc/rfc8915.html)
-
-See `PRODUCT-REQUIREMENTS.md` for the agreed direction and acceptance gates.
-
-## Source history and builds
-
-Source is tracked in the private [nettime-next GitHub repository](https://github.com/Optimusprimeums/nettime-next).
-The Windows workflow runs tests, builds the installer and checks service
-installation, collection, stop/start, upgrade and uninstall. Build artifacts
-include a SHA-256 checksum and the source commit. NTS, full synchronization
-conformance and signed releases remain separately tracked issues.
+See [Windows deployment/build details](docs/WINDOWS-SERVICE.md), the
+[validation matrix](docs/SYNCHRONIZATION-PREVIEW.md) and the private
+[GitHub repository](https://github.com/Optimusprimeums/nettime-next).

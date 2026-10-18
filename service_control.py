@@ -134,7 +134,7 @@ def install(executable=None):
             if service.QueryServiceStatus(handle)[1] != service.SERVICE_STOPPED:
                 raise RuntimeError("Stop the observer service before installing an upgrade")
         service.ChangeServiceConfig2(handle, service.SERVICE_CONFIG_DESCRIPTION,
-            "Measures every configured NTP source and retains seven days of evidence. Does not adjust the clock.")
+            "Measures every configured NTP source and retains seven days of evidence. Clock takeover requires explicit approval and release validation.")
         service.ChangeServiceConfig2(handle, service.SERVICE_CONFIG_SERVICE_SID_INFO, service.SERVICE_SID_TYPE_UNRESTRICTED)
         service.ChangeServiceConfig2(handle, service.SERVICE_CONFIG_DELAYED_AUTO_START_INFO, True)
         service.ChangeServiceConfig2(handle, service.SERVICE_CONFIG_FAILURE_ACTIONS, {
@@ -145,7 +145,7 @@ def install(executable=None):
         set_permissions()
         store = Store(root / "data" / "history.sqlite3", cfg["retention_days"])
         store.event("service_registered", {"executable": str(exe), "account": "LocalService",
-            "mode": "measurement only", "startup": "automatic (delayed)"})
+            "mode": cfg["clock"]["mode"], "startup": "automatic (delayed)"})
     finally:
         if handle:
             handle.Close()
@@ -161,7 +161,9 @@ def apply_config(path):
     root = machine_root()
     config = root / "settings.json"
     previous = config.read_text(encoding="utf-8")
-    old = json.loads(previous)
+    old = json.loads(previous.lstrip("\ufeff"))
+    if cfg['clock']['mode'] != old.get('clock', {}).get('mode', 'observe'):
+        raise ValueError('Clock ownership can only change through Take over or Restore previous controller')
     running = query_status() == "running"
     action("stop")
     temp = config.with_suffix(".json.tmp")

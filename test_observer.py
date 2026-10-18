@@ -139,10 +139,10 @@ class ProtocolTests(unittest.TestCase):
             parse_reply(raw, stamp, sample)
 
     def test_nts_required_never_sends_plaintext(self):
-        with patch("protocol.socket.getaddrinfo") as dns, patch("protocol.socket.socket") as sock:
+        with patch("nts.establish", side_effect=ValueError("Certificate verification failed")), patch("protocol.socket.getaddrinfo") as dns, patch("protocol.socket.socket") as sock:
             result = query("example.invalid", 123, 1, 64, security_mode="nts_required")
             self.assertEqual(result.status, "security_blocked")
-            self.assertEqual(result.authentication_status, "not_attempted")
+            self.assertEqual(result.authentication_status, "failed")
             dns.assert_not_called()
             sock.assert_not_called()
 

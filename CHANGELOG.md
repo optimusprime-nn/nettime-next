@@ -1,5 +1,13 @@
 # Change history
 
+## 0.3.0 — Source comparison, authenticated NTS and synchronization assessment
+
+- Compare 24-hour, seven-day or retained evidence: valid attempts, coverage/gaps, median/P95 offsets and RTT, PC offset variation, stratum changes, authentication and selection duration/reasons. Export comparison JSON/CSV and selection changes.
+- Implement NTS-KE with TLS 1.3, CA and hostname validation, ALPN, exporter-derived AES-SIV keys, negotiated NTP endpoints, identifiers, cookie renewal, daily session renewal and restart-persistent retry backoff. No plain-NTP fallback; no keys/cookies in logs.
+- Add a separate eight-stage NTP mitigation assessment with aged dispersion, correctness-interval selection, clustering and weighted combination. Log all candidates, reasons, weights and cluster removals. Source groups prevent shared upstreams receiving extra votes; unassigned groups are monitored but excluded from synchronization.
+- Implement bounded slew planning, drift estimation, warmup, stale-sample/conflict watchdog and a durable takeover/rollback transaction using a dedicated virtual service account. **Takeover is release-gated off**, pending the conformance/endurance matrix. No clock steps or local NTP serving.
+- Add adversarial NTS/TLS, synthetic drift, comparison and transaction tests, plus a disposable Windows ownership/privilege/rollback integration fixture. Existing settings and history are retained.
+
 ## 0.2.4 — Dark desktop appearance
 
 - Default dark appearance for the main window, settings, server tables, chart and decision evidence.

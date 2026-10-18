@@ -1,7 +1,8 @@
 """Frozen Windows SCM entry point and administrative helper.
 
 The service uses LocalService and a service-specific writable data directory.
-It never starts a desktop UI or changes the system time.
+It never starts a desktop UI. Clock control requires a recorded takeover; the
+preview release gate currently prevents activating takeover.
 """
 import argparse
 import logging
@@ -69,11 +70,18 @@ class ObserverService(win32serviceutil.ServiceFramework):
     def SvcDoRun(self):
         root = machine_root()
         try:
-            logger().info("Observer service %s starting; measurement only", VERSION)
+            logger().info("Service %s starting; clock mode comes from protected configuration", VERSION)
             cfg = load_config(root / "settings.json")
             store = Store(root / "data" / "history.sqlite3", cfg["retention_days"])
             with InstanceLock(root / "data" / "monitor.lock"):
-                self.monitor = Monitor(cfg, store, ServiceMessages())
+                controller = None
+                if cfg['clock']['mode'] == 'slew':
+                    from takeover import ownership_guard
+                    from clock_control import Controller, WindowsClock
+                    if not ownership_guard(root):
+                        raise RuntimeError('Clock control requested without exclusive takeover ownership')
+                    controller = Controller(cfg['clock'], store, WindowsClock(), lambda: ownership_guard(root))
+                self.monitor = Monitor(cfg, store, ServiceMessages(), controller=controller)
                 if self.shutdown.is_set():
                     self.monitor.stop.set()
                 self.ReportServiceStatus(win32service.SERVICE_RUNNING)
@@ -107,7 +115,7 @@ def main():
         servicemanager.StartServiceCtrlDispatcher()
         return
     parser = argparse.ArgumentParser(description="NetTime Next Windows service")
-    parser.add_argument("command", choices=("install", "start", "stop", "restart", "remove", "status", "health", "apply-config", "version"))
+    parser.add_argument("command", choices=("install", "start", "stop", "restart", "remove", "status", "health", "apply-config", "version", "takeover", "rollback"))
     parser.add_argument("--file")
     args = parser.parse_args()
     if args.command == "version":
@@ -121,14 +129,20 @@ def main():
         print(json.dumps({"service": query_status(), "version": VERSION,
                           "latest_decision_utc": decision["utc"] if decision else None,
                           "servers": len(decision["servers"]) if decision else 0,
-                          "mode": "measurement only"}))
+                          "mode": load_config(root / "settings.json")["clock"]["mode"]}))
     elif args.command == "install":
         install()
     elif args.command == "apply-config":
         if not args.file:
             parser.error("apply-config requires --file")
         apply_config(args.file)
+    elif args.command in ('takeover', 'rollback'):
+        from takeover import activate, rollback
+        (activate if args.command == 'takeover' else rollback)()
     else:
+        if args.command == 'remove':
+            from takeover import rollback
+            rollback()
         action(args.command)
 
 

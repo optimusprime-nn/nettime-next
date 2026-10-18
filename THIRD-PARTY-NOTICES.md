@@ -14,3 +14,9 @@ the application is not a modification of PyInstaller.
 License files from the build environment are copied into the installer payload
 by the packaging script. Inno Setup produces the installer; its compiler is a
 build dependency and is not installed on the end user's machine.
+
+The NTS client also bundles pyOpenSSL (Apache-2.0), cryptography and its OpenSSL
+runtime (Apache-2.0/BSD notices as distributed), service-identity (MIT), certifi
+(MPL-2.0 CA bundle), cffi, pycparser, attrs and typing-extensions. Their distributed
+license files are copied into ThirdPartyLicenses. No cryptographic primitives
+are implemented by this application.

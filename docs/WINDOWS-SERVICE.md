@@ -1,4 +1,4 @@
-# Windows service preview 0.2.4
+# Windows service preview 0.3.0
 
 The installer bundles Python and all runtime dependencies. A separate Python
 installation is not required on the destination computer. Windows 10/11 x64 is
@@ -33,11 +33,13 @@ lookup uses the Windows resolver, so stop can wait for an in-flight lookup.
 
 ## Coexistence
 
-This service is **measurement only**. It does not set system time, stop the old
-NetTime/W32Time services, register a time provider, bind UDP 123, or install
-firewall rules. Time requests use ephemeral UDP client ports. Existing clock
-controllers continue operating. A future clock-control release needs an explicit
-takeover flow and further NTP/NTS validation.
+This preview remains **measurement only** behind a clock-takeover release gate.
+It does not stop the original NetTime/W32Time services or bind UDP 123. NTS
+authentication is now implemented and uses ephemeral UDP ports after TLS key
+establishment. Existing clock controllers continue operating. Source comparison
+and synchronization assessments are recorded without adjusting the clock.
+See [the validation matrix](SYNCHRONIZATION-PREVIEW.md) for the implemented but
+release-gated controller and ownership/rollback transaction.
 
 ## Upgrade and uninstall
 
@@ -58,7 +60,7 @@ python build.py --iscc path-to-ISCC.exe
 ```
 
 The build runs tests, creates the app/service executables, includes runtime
-license notices and produces `dist/NetTimeNext-0.2.4-Setup-x64.exe`, a checksum and
+license notices and produces `dist/NetTimeNext-0.3.0-Setup-x64.exe`, a checksum and
 a manifest identifying the source commit. Builds are traceable to source and
 pinned dependencies; byte-for-byte reproducible binaries are not claimed.
 
@@ -68,6 +70,11 @@ collection, service stop/start and uninstall with an offline NTS-blocked fixture
 overwrite an existing observer installation or settings. Its optional
 `-KeepInstalled` is intended for an explicitly requested development deployment.
 
-This is an unsigned preview. NTS key exchange/authentication and full NTP
-synchronization compliance remain tracked work; the installer does not imply
-those features are complete.
+CI also verifies bundled TLS/AES-SIV/certificate dependencies and, only on
+disposable GitHub-hosted runners, real Windows takeover/virtual-account privilege
+and rollback without usable clock samples. The frozen helper keeps takeover
+locked. Ordinary installer tests never change another clock service.
+
+This is an unsigned preview. Full NTP conformance and seven-day reliability
+validation remain tracked work; NTS interoperability alone does not establish
+those properties.
