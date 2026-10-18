@@ -2,6 +2,7 @@ use crate::protocol::{Sample, utc};
 use anyhow::Result;
 use rusqlite::{Connection, OpenFlags, OptionalExtension, params};
 use serde_json::Value;
+use std::io::{BufWriter, Write};
 use std::{path::Path, time::Duration};
 pub struct Store {
     pub db: Connection,
@@ -115,19 +116,106 @@ impl Store {
     }
     pub fn export(&self, folder: &Path) -> Result<()> {
         std::fs::create_dir_all(folder)?;
+        let snapshot = self.db.unchecked_transaction()?;
         for table in ["samples", "decisions", "events"] {
-            let mut q = self
-                .db
-                .prepare(&format!("SELECT payload FROM {table} ORDER BY id"))?;
-            let rows = q.query_map([], |r| r.get::<_, String>(0))?;
-            let values = rows
-                .map(|r| Ok(serde_json::from_str::<Value>(&r?)?))
-                .collect::<Result<Vec<_>>>()?;
-            std::fs::write(
-                folder.join(format!("{table}.json")),
-                serde_json::to_vec_pretty(&values)?,
-            )?;
+            let mut q = snapshot.prepare(&format!("SELECT * FROM {table} ORDER BY id"))?;
+            let names = q
+                .column_names()
+                .iter()
+                .map(|s| s.to_string())
+                .collect::<Vec<_>>();
+            let mut rows = q.query([])?;
+            let mut output =
+                BufWriter::new(std::fs::File::create(folder.join(format!("{table}.json")))?);
+            output.write_all(b"[\n")?;
+            let mut first = true;
+            while let Some(row) = rows.next()? {
+                let mut record = serde_json::Map::new();
+                for (i, name) in names.iter().enumerate() {
+                    use rusqlite::types::ValueRef;
+                    let value = match row.get_ref(i)? {
+                        ValueRef::Null => Value::Null,
+                        ValueRef::Integer(v) => serde_json::json!(v),
+                        ValueRef::Real(v) => serde_json::json!(v),
+                        ValueRef::Text(v) => {
+                            let text = std::str::from_utf8(v)?;
+                            if name == "payload" {
+                                serde_json::from_str(text)?
+                            } else {
+                                Value::String(text.into())
+                            }
+                        }
+                        ValueRef::Blob(v) => Value::String(hex::encode(v)),
+                    };
+                    record.insert(name.clone(), value);
+                }
+                if !first {
+                    output.write_all(b",\n")?;
+                }
+                first = false;
+                serde_json::to_writer(&mut output, &record)?;
+            }
+            output.write_all(b"\n]\n")?;
+            output.flush()?;
         }
+        snapshot.commit()?;
         Ok(())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    #[test]
+    fn failed_measurements_do_not_bias_offsets_and_exports_keep_event_timing() {
+        let folder = std::env::current_dir().unwrap().join("work").join(format!(
+            "native-store-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        let database = folder.join("history.sqlite3");
+        let mut store = Store::open(&database, false).unwrap();
+        let sample = Sample {
+            host: "invalid.example".into(),
+            port: 123,
+            status: "error".into(),
+            ..Default::default()
+        };
+        store
+            .save(
+                1,
+                &[sample],
+                &serde_json::json!({"selected":null,"confidence":"None"}),
+                &[],
+            )
+            .unwrap();
+        let offset: Option<f64> = store
+            .db
+            .query_row("SELECT offset_ms FROM samples", [], |r| r.get(0))
+            .unwrap();
+        assert!(offset.is_none());
+        store
+            .event("proof", &serde_json::json!({"reason":"example"}))
+            .unwrap();
+        store.export(&folder).unwrap();
+        let events: Value =
+            serde_json::from_str(&std::fs::read_to_string(folder.join("events.json")).unwrap())
+                .unwrap();
+        assert_eq!(events[0]["kind"], "proof");
+        assert!(events[0]["utc"].as_f64().unwrap() > 0.);
+        assert_eq!(events[0]["payload"]["reason"], "example");
+        drop(store);
+        for file in [
+            "history.sqlite3",
+            "samples.json",
+            "decisions.json",
+            "events.json",
+        ] {
+            std::fs::remove_file(folder.join(file)).unwrap();
+        }
+        std::fs::remove_dir(folder).unwrap();
     }
 }

@@ -29,9 +29,7 @@ in GitHub issue 1. Do not use this preview as a second clock writer.
 Build on Windows with the MSVC Rust toolchain:
 
 ```
-cargo test --locked
-cargo build --release --locked
-ISCC.exe installer.iss
+python package.py --iscc C:\path\to\ISCC.exe
 ```
 
 `NetTimeNextNativeService.exe --help` lists diagnostic and service commands.

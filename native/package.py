@@ -35,7 +35,7 @@ def main():
         if package.get('license_file'):
             candidates.append(folder/package['license_file'])
         for file in candidates:
-            if file.is_file() and (file.name.upper().startswith(('LICENSE','LICENCE','COPYING','NOTICE','COPYRIGHT')) or file==folder/package.get('license_file','<none>')):
+            if file.is_file() and (file.name.upper().startswith(('LICENSE','LICENCE','COPYING','NOTICE','COPYRIGHT')) or file==folder/(package.get('license_file') or '<none>')):
                 target=package['name']+'-'+package['version']+'-'+file.name
                 shutil.copy2(file,notices/target)
                 licenses.append(target)
