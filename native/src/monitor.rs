@@ -1,0 +1,142 @@
+use crate::{
+    config::Config,
+    protocol::{self, mono, utc},
+    selection::{self, Peer},
+    storage::Store,
+};
+use anyhow::{Result, ensure};
+use serde_json::{Value, json};
+use std::{
+    sync::{
+        Arc,
+        atomic::{AtomicBool, Ordering},
+    },
+    thread,
+    time::Duration,
+};
+pub struct Monitor {
+    pub cfg: Config,
+    pub peers: Vec<Peer>,
+    pub store: Store,
+    cycle: i64,
+    last_wall: f64,
+    last_mono: f64,
+    next_prune: f64,
+}
+impl Monitor {
+    pub fn new(cfg: Config, store: Store) -> Result<Self> {
+        // The migration observer must never become a second system clock writer.
+        ensure!(
+            cfg.clock.mode == "observe",
+            "Native migration collector is measurement-only; current service keeps clock ownership"
+        );
+        let mut peers: Vec<_> = cfg
+            .servers
+            .iter()
+            .map(|s| Peer::new(s.clone(), cfg.poll_seconds))
+            .collect();
+        let now = mono();
+        let wall = utc();
+        for (key, state) in store.states()? {
+            if let Some(p) = peers.iter_mut().find(|p| p.server.key() == key) {
+                p.interval = cfg
+                    .poll_seconds
+                    .max(state["interval"].as_f64().unwrap_or(0.));
+                p.disabled = state["disabled"].as_str().unwrap_or("").into();
+                p.reach = state["reach"].as_u64().unwrap_or(0) as u8;
+                p.next_due = now + (state["next_utc"].as_f64().unwrap_or(0.) - wall).max(0.);
+                p.nts.failures = state["nts_failures"].as_u64().unwrap_or(0) as u32;
+                p.nts.retry_at =
+                    now + (state["nts_retry_utc"].as_f64().unwrap_or(0.) - wall).max(0.);
+            }
+        }
+        let cycle = store.next_cycle()?;
+        Ok(Self {
+            cfg,
+            peers,
+            store,
+            cycle,
+            last_wall: wall,
+            last_mono: now,
+            next_prune: now + 3600.,
+        })
+    }
+    pub fn collect(&mut self) -> Result<Option<Value>> {
+        let now = mono();
+        let wall = utc();
+        let step = (wall - self.last_wall) - (now - self.last_mono);
+        if step.abs() > 0.05 {
+            self.store.event(
+                "local_clock_discontinuity",
+                &json!({"step_ms":step*1000.,"action":"Cleared sample filters"}),
+            )?;
+            for p in &mut self.peers {
+                p.samples.clear()
+            }
+            self.next_prune = now + 86400.;
+        }
+        self.last_wall = wall;
+        self.last_mono = now;
+        let timeout = self.cfg.timeout_seconds;
+        let samples = thread::scope(|scope| {
+            let workers: Vec<_> = self
+                .peers
+                .iter_mut()
+                .filter(|p| p.disabled.is_empty() && now >= p.next_due)
+                .map(|p| {
+                    scope.spawn(move || {
+                        let sample = protocol::query(&p.server, timeout, p.interval, &mut p.nts);
+                        p.accept(sample.clone());
+                        p.next_due = mono() + p.interval;
+                        sample
+                    })
+                })
+                .collect();
+            workers
+                .into_iter()
+                .map(|w| w.join().map_err(|_| anyhow::anyhow!("NTP worker panicked")))
+                .collect::<Result<Vec<_>>>()
+        })?;
+        if samples.is_empty() {
+            return Ok(None);
+        }
+        let assessment = selection::assess(&self.peers, &self.cfg, mono());
+        let mut servers = serde_json::Map::new();
+        for p in &self.peers {
+            let mut v = p.latest.as_ref().map(|s| s.data()).unwrap_or(Value::Null);
+            if let Some(obj) = v.as_object_mut() {
+                obj.insert("reach".into(), json!(format!("{:03o}", p.reach)));
+                obj.insert(
+                    "next_check_seconds".into(),
+                    json!((p.next_due - mono()).max(0.)),
+                );
+                obj.insert(
+                    "selection_reason".into(),
+                    json!(assessment.reasons.get(&p.server.key())),
+                );
+            }
+            servers.insert(p.server.key(), v);
+        }
+        let decision = json!({"utc":utc(),"policy":"native-migration-observer-v1","selected":assessment.selected,"confidence":"Source agreement; independence depends on configured groups","explanation":assessment.explanation,"synchronization":assessment,"servers":servers,"clock_action":{"action":"observe","reason":"Existing service retains clock ownership"}});
+        let states=self.peers.iter().map(|p|(p.server.key(),json!({"interval":p.interval,"disabled":p.disabled,"reach":p.reach,"next_utc":utc()+(p.next_due-mono()).max(0.),"nts_failures":p.nts.failures,"nts_retry_utc":utc()+(p.nts.retry_at-mono()).max(0.)}))).collect::<Vec<_>>();
+        self.store.save(self.cycle, &samples, &decision, &states)?;
+        self.cycle += 1;
+        if mono() >= self.next_prune {
+            self.store.prune(self.cfg.retention_days)?;
+            self.next_prune = mono() + 3600.;
+        }
+        Ok(Some(decision))
+    }
+    pub fn run(&mut self, stop: Arc<AtomicBool>) -> Result<()> {
+        self.store.event(
+            "native_collector_started",
+            &json!({"version":env!("CARGO_PKG_VERSION"),"mode":"observe"}),
+        )?;
+        while !stop.load(Ordering::Relaxed) {
+            self.collect()?;
+            thread::sleep(Duration::from_millis(250));
+        }
+        self.store.event("native_collector_stopped", &json!({}))?;
+        Ok(())
+    }
+}

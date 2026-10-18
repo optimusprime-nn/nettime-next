@@ -1,0 +1,31 @@
+param([Parameter(Mandatory=$true)][string]$Installer)
+$ErrorActionPreference='Stop'
+if ($env:GITHUB_ACTIONS -ne 'true') { throw 'Installed lifecycle test is restricted to disposable GitHub runners.' }
+$setup=Start-Process -FilePath (Resolve-Path $Installer) -ArgumentList '/VERYSILENT /SUPPRESSMSGBOXES /NORESTART /TASKS=observer' -WindowStyle Hidden -Wait -PassThru
+if ($setup.ExitCode -ne 0) { throw 'Rust preview installation failed' }
+$root=Join-Path $env:ProgramData 'NetTimeNextNativePreview'
+$app=Join-Path $env:ProgramFiles 'NetTime Next Rust Preview'
+$helper=Join-Path $app 'NetTimeNextNativeService.exe'
+$fixture=@{servers=@(@{host='ntp.invalid';security='nts_required';source_group='fixture'});poll_seconds=64;timeout_seconds=1;retention_days=7;max_distance_ms=1000;clock=@{mode='observe'}}
+[IO.File]::WriteAllText((Join-Path $root 'settings.json'),($fixture|ConvertTo-Json -Depth 10),[Text.UTF8Encoding]::new($false))
+& $helper --start-service
+if ($LASTEXITCODE -ne 0) { throw 'Native service start failed' }
+$deadline=[DateTime]::UtcNow.AddSeconds(45)
+while ([DateTime]::UtcNow -lt $deadline) {
+    $service=Get-CimInstance Win32_Service -Filter "Name='NetTimeNextNativePreview'"
+    if ($service.State -eq 'Running' -and (Test-Path (Join-Path $root 'data/history.sqlite3'))) { break }
+    Start-Sleep -Seconds 1
+}
+if ($service.State -ne 'Running') { throw 'Native service did not run' }
+if ($service.StartName -ne 'NT AUTHORITY\LocalService') { throw 'Unexpected native service identity' }
+Start-Sleep -Seconds 3
+$database=Join-Path $root 'data/history.sqlite3'
+& (Join-Path $app 'NetTimeNextNative.exe') --smoke-ui --config (Join-Path $root 'settings.json') --database $database
+if ($LASTEXITCODE -ne 0) { throw 'Installed native desktop failed' }
+& $helper --export (Join-Path $env:RUNNER_TEMP 'native-export') --database $database
+if ($LASTEXITCODE -ne 0) { throw 'Native export failed' }
+$uninstall=Start-Process -FilePath (Join-Path $app 'unins000.exe') -ArgumentList '/VERYSILENT /SUPPRESSMSGBOXES /NORESTART' -WindowStyle Hidden -Wait -PassThru
+if ($uninstall.ExitCode -ne 0) { throw 'Native uninstall failed' }
+if (Get-Service NetTimeNextNativePreview -ErrorAction SilentlyContinue) { throw 'Native service remains after uninstall' }
+if (-not (Test-Path $database)) { throw 'Uninstall removed retained history' }
+Write-Output 'Rust installed service, LocalService identity, desktop, export, uninstall and retained history passed.'

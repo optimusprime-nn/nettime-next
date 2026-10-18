@@ -1,0 +1,36 @@
+name: Rust migration checks
+on:
+  push:
+    paths: ['native/**', '.github/workflows/rust.yml', 'desktop.manifest', 'nettime.ico']
+  pull_request:
+    paths: ['native/**', '.github/workflows/rust.yml', 'desktop.manifest', 'nettime.ico']
+permissions:
+  contents: read
+jobs:
+  native:
+    runs-on: windows-2022
+    timeout-minutes: 25
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      - name: Package native Windows preview
+        run: |
+          $compiler = & ./scripts/Get-InnoSetup.ps1 -Destination "$env:RUNNER_TEMP/nettime-inno"
+          python ./native/package.py --iscc $compiler
+      - name: Native desktop launch check
+        run: |
+          ./native/target/release/NetTimeNextNative.exe --smoke-ui
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+      - name: Native installed service lifecycle
+        run: ./native/test-installed.ps1 -Installer ./dist/NetTimeNext-Rust-0.4.0-Preview-Setup-x64.exe
+      - uses: actions/upload-artifact@v4
+        with:
+          name: Rust-native-preview-x64
+          path: |
+            native/target/release/NetTimeNextNative*.exe
+            dist/NetTimeNext-Rust-0.4.0-Preview-Setup-x64.exe
+            dist/rust-build-manifest.json
+            dist/RUST-SHA256SUMS.txt

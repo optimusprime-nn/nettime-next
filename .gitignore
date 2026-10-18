@@ -16,3 +16,4 @@ tools/
 work/
 VALIDATION.md
 *.spec
+native/target/
