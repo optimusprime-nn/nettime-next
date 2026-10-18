@@ -4,6 +4,7 @@ import os
 from pathlib import Path
 import tkinter as tk
 from tkinter import ttk
+from window_chrome import apply_title_bar
 
 PALETTES = {
     "Dark": dict(bg="#121923", field="#1b2533", text="#e6edf7", muted="#a9b9cc",
@@ -79,6 +80,8 @@ class Appearance:
             self.root.option_add("*TCombobox*Listbox." + option, value)
 
         def visit(widget):
+            if isinstance(widget, (tk.Tk, tk.Toplevel)):
+                self.apply_chrome(widget)
             if isinstance(widget, (tk.Tk, tk.Toplevel, tk.Frame)):
                 widget.configure(background=p["bg"])
             if isinstance(widget, tk.Text):
@@ -94,3 +97,11 @@ class Appearance:
             for child in widget.winfo_children():
                 visit(child)
         visit(window or self.root)
+
+    def apply_chrome(self, window):
+        apply_title_bar(window, self.theme == "Dark", self.palette["bg"], self.palette["text"])
+        if not getattr(window, "_nettime_chrome_bound", False):
+            # Tk may recreate its wrapper when restored from the notification area.
+            window.bind("<Map>", lambda event: self.apply_chrome(window)
+                        if event.widget is window else None, add="+")
+            window._nettime_chrome_bound = True

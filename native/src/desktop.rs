@@ -44,6 +44,8 @@ pub fn run(database: PathBuf, config_path: PathBuf, smoke: bool) -> Result<()> {
         options,
         Box::new(move |cc| {
             cc.egui_ctx.set_visuals(egui::Visuals::dark());
+            cc.egui_ctx
+                .send_viewport_cmd(ViewportCommand::SetTheme(egui::SystemTheme::Dark));
             let actions = Arc::new(Mutex::new(vec![]));
             let queue = actions.clone();
             let context = cc.egui_ctx.clone();
@@ -233,7 +235,7 @@ impl eframe::App for Desktop {
             self.last = Instant::now();
         }
         ctx.request_repaint_after(Duration::from_millis(250));
-        egui::TopBottomPanel::top("header").show(ctx,|ui|{ui.add_space(10.);ui.horizontal(|ui|{ui.heading("NetTime Next");ui.label("Rust preview");if ui.button("Settings").clicked(){self.settings=true;}if ui.checkbox(&mut self.dark,"Dark mode").changed(){ctx.set_visuals(if self.dark{egui::Visuals::dark()}else{egui::Visuals::light()});}if ui.button("Refresh").clicked(){self.refresh();}});
+        egui::TopBottomPanel::top("header").show(ctx,|ui|{ui.add_space(10.);ui.horizontal(|ui|{ui.heading("NetTime Next");ui.label("Rust preview");if ui.button("Settings").clicked(){self.settings=true;}if ui.checkbox(&mut self.dark,"Dark mode").changed(){ctx.set_visuals(if self.dark{egui::Visuals::dark()}else{egui::Visuals::light()});ctx.send_viewport_cmd(ViewportCommand::SetTheme(if self.dark{egui::SystemTheme::Dark}else{egui::SystemTheme::Light}));}if ui.button("Refresh").clicked(){self.refresh();}});
             ui.label("Windows service continues while this desktop window is closed.");ui.label("Native desktop preview · reading the current service’s evidence. Clock ownership stays with the tested service.");ui.add_space(8.);});
         egui::CentralPanel::default().show(ctx,|ui|{
             if !self.error.is_empty(){ui.colored_label(egui::Color32::LIGHT_YELLOW,&self.error);}

@@ -1,3 +1,10 @@
+## 0.3.3 — Complete dark window chrome
+
+- Matches the Windows title bar and caption text to the selected Dark or Light theme in the desktop and Settings windows.
+- Reapplies the title-bar theme when windows are restored from the notification area, without showing hidden windows during theme changes.
+- Adds Windows DWM readback checks for main and Settings windows across theme changes and restore.
+- Applies native window theme changes to the Rust preview too. Existing clock ownership and observation settings are preserved.
+
 ## 0.3.2 — Correct precise clock frequency direction
 
 - Fixes the inverted Windows precise-frequency conversion found by the longer live run. Positive wall-speed corrections now reduce the frequency divisor; readback uses the same wall-speed convention.

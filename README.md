@@ -1,4 +1,4 @@
-# NetTime Next — Windows service preview 0.3.2
+# NetTime Next — Windows service preview 0.3.3
 
 NetTime Next checks every configured NTP/NTS source and retains at least seven
 days of measurements and selection evidence. The service collects while the
@@ -15,7 +15,7 @@ preview is separate and does not adjust the clock.
 
 ## Install and upgrade
 
-Run `NetTimeNext-0.3.2-Setup-x64.exe`. Python is bundled. Windows 10/11 x64 is the
+Run `NetTimeNext-0.3.3-Setup-x64.exe`. Python is bundled. Windows 10/11 x64 is the
 target; installation needs administrator approval. Install over the existing
 version to preserve configured servers, settings and history. Installation does
 not stop the original NetTime or Windows Time services. This preview is unsigned.
