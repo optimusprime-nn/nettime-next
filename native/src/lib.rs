@@ -145,6 +145,7 @@ pub fn run() -> Result<()> {
             screen.is_some(),
             screen.map(|(_, name)| *name).unwrap_or("live").into(),
             args.iter().any(|a| a == "--software-rendering"),
+            value("--test-tray-lifecycle")?,
         )
     }
 }

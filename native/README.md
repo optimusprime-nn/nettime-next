@@ -17,6 +17,10 @@ Servers can be moved up and down in Settings; Save and apply preserves that orde
 and Overview follows it by default through its Configured order option.
 Settings drafts are separate from the history source being viewed and survive
 page changes. Save and apply is the explicit service configuration action.
+X and minimise hide the desktop in the system tray. Left-click its clock icon
+to reopen it; right-click for Open, Settings and Exit desktop app. Exit closes
+only the desktop. If the tray cannot be created, X closes the desktop normally
+and minimising leaves it accessible on the taskbar.
 
 ## Clock ownership
 

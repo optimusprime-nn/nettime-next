@@ -3,6 +3,7 @@ mod panels;
 mod reports;
 mod settings;
 mod style;
+mod tray;
 use crate::{
     comparison::{self, Report},
     ownership::Services,
@@ -37,7 +38,7 @@ struct Desktop {
     _open: MenuItem,
     _settings_item: MenuItem,
     _exit: MenuItem,
-    actions: Arc<Mutex<Vec<u8>>>,
+    actions: Arc<Mutex<Vec<tray::Action>>>,
     hidden: bool,
     smoke: bool,
     config_path: PathBuf,
@@ -56,6 +57,7 @@ struct Desktop {
     native_service_state: String,
     dirty_settings: bool,
     reload_after_operation: bool,
+    exiting: bool,
 }
 pub fn run(
     database: PathBuf,
@@ -63,6 +65,7 @@ pub fn run(
     smoke: bool,
     screen: String,
     software: bool,
+    tray_test: Option<PathBuf>,
 ) -> Result<()> {
     // Windows' built-in Direct3D software adapter also works without an OpenGL
     // driver (server sessions, remote desktops and disposable test machines).
@@ -117,26 +120,15 @@ pub fn run(
             style::install_fonts(&cc.egui_ctx);
             cc.egui_ctx.set_zoom_factor(appearance.zoom);
             let actions = Arc::new(Mutex::new(vec![]));
-            let queue = actions.clone();
-            let context = cc.egui_ctx.clone();
+            let control = tray::Control {
+                window: tray::Window::from_context(cc)?,
+                queue: actions.clone(),
+                context: cc.egui_ctx.clone(),
+            };
+            let click_control = control.clone();
             TrayIconEvent::set_event_handler(Some(move |event| {
-                if matches!(
-                    event,
-                    TrayIconEvent::DoubleClick {
-                        button: MouseButton::Left,
-                        ..
-                    } | TrayIconEvent::Click {
-                        button: MouseButton::Left,
-                        button_state: MouseButtonState::Up,
-                        ..
-                    }
-                ) {
-                    if let Ok(mut q) = queue.lock() {
-                        q.push(1);
-                    }
-                    context.send_viewport_cmd(ViewportCommand::Visible(true));
-                    context.send_viewport_cmd(ViewportCommand::Minimized(false));
-                    context.request_repaint();
+                if tray::opens(&event) {
+                    click_control.request(tray::Action::Open);
                 }
             }));
             let open = MenuItem::new("Open NetTime Next", true, None);
@@ -147,20 +139,16 @@ pub fn run(
                 settings_item.id().clone(),
                 exit.id().clone(),
             ];
-            let queue = actions.clone();
-            let context = cc.egui_ctx.clone();
+            let menu_control = control.clone();
             MenuEvent::set_event_handler(Some(move |event: MenuEvent| {
                 if let Some(index) = ids.iter().position(|id| *id == event.id) {
-                    if let Ok(mut q) = queue.lock() {
-                        q.push(index as u8 + 1);
-                    }
-                    if index != 2 {
-                        context.send_viewport_cmd(ViewportCommand::Visible(true));
-                        context.send_viewport_cmd(ViewportCommand::Minimized(false));
-                    } else {
-                        context.send_viewport_cmd(ViewportCommand::Close);
-                    }
-                    context.request_repaint();
+                    menu_control.request(
+                        [
+                            tray::Action::Open,
+                            tray::Action::Settings,
+                            tray::Action::Exit,
+                        ][index],
+                    );
                 }
             }));
             let menu = Menu::new();
@@ -171,9 +159,16 @@ pub fn run(
                     .with_tooltip("NetTime Next · Rust preview")
                     .with_icon(icon)
                     .with_menu(Box::new(menu))
+                    .with_menu_on_left_click(false)
                     .build()
                     .ok()
             });
+            if let Some(destination) = tray_test {
+                if tray.is_none() {
+                    return Err(anyhow::anyhow!("A working Windows notification area is required for the tray lifecycle test").into());
+                }
+                tray::test_lifecycle(control, destination);
+            }
             let (cfg, configuration_error) = match Config::load(&config_path) {
                 Ok(cfg) => (cfg, String::new()),
                 Err(error) => (
@@ -229,6 +224,7 @@ pub fn run(
                 native_service_state: "Checking service…".into(),
                 dirty_settings: false,
                 reload_after_operation: false,
+                exiting: false,
             }))
         }),
     )
@@ -321,13 +317,15 @@ impl eframe::App for Desktop {
         if let Ok(mut q) = self.actions.lock() {
             for action in q.drain(..) {
                 match action {
-                    1 => show = true,
-                    2 => {
+                    tray::Action::Open => show = true,
+                    tray::Action::Settings => {
                         show = true;
                         open_settings = true
                     }
-                    3 => ctx.send_viewport_cmd(ViewportCommand::Close),
-                    _ => {}
+                    tray::Action::Exit => {
+                        self.exiting = true;
+                        ctx.send_viewport_cmd(ViewportCommand::Close);
+                    }
                 }
             }
         }
@@ -340,9 +338,15 @@ impl eframe::App for Desktop {
             ctx.send_viewport_cmd(ViewportCommand::Minimized(false));
             ctx.send_viewport_cmd(ViewportCommand::Focus);
         }
+        let close_requested = ctx.input(|i| i.viewport().close_requested());
+        if close_requested && self.tray.is_some() && !self.exiting && !self.smoke {
+            ctx.send_viewport_cmd(ViewportCommand::CancelClose);
+        }
         if !show
-            && ctx.input(|i| i.viewport().minimized.unwrap_or(false))
+            && !self.exiting
+            && !self.smoke
             && self.tray.is_some()
+            && (close_requested || ctx.input(|i| i.viewport().minimized.unwrap_or(false)))
             && !self.hidden
         {
             self.hidden = true;

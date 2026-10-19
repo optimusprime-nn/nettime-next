@@ -350,7 +350,7 @@ impl Desktop {
         }
         ui.add_space(12.);
         ui.strong("System tray");
-        ui.label("Minimising hides the window in the notification area. Click the clock icon to reopen it, or use its menu for Settings and Exit.");
+        ui.label("Closing with X or minimising hides the window in the notification area. Click the clock icon to reopen it. Right-click it for Open, Settings and Exit desktop app.");
         ui.weak("Closing the desktop leaves the Windows collector running.");
     }
     fn apply_settings(&mut self) {

@@ -29,6 +29,12 @@ foreach ($screen in @('--smoke-ui','--smoke-settings','--smoke-comparison','--sm
     $desktop=Start-Process -FilePath (Join-Path $app 'NetTimeNextNative.exe') -ArgumentList $arguments -Wait -PassThru
     if ($desktop.ExitCode -ne 0) { throw "Installed native desktop failed: $screen" }
 }
+$trayReport=Join-Path $PSScriptRoot '..\dist\rust-tray-lifecycle.json'
+$trayArguments="--software-rendering --test-tray-lifecycle `"$trayReport`" --config `"$(Join-Path $root 'settings.json')`" --database `"$database`""
+$trayDesktop=Start-Process -FilePath (Join-Path $app 'NetTimeNextNative.exe') -ArgumentList $trayArguments -PassThru
+if (-not $trayDesktop.WaitForExit(45000)) { Stop-Process -Id $trayDesktop.Id; throw 'Installed tray lifecycle did not exit.' }
+if ($trayDesktop.ExitCode -ne 0 -or -not (Test-Path -LiteralPath $trayReport)) { throw 'Installed tray lifecycle did not complete.' }
+if (-not (Get-Content -LiteralPath $trayReport -Raw | ConvertFrom-Json).passed) { throw 'Installed tray lifecycle failed.' }
 & $helper --export (Join-Path $env:RUNNER_TEMP 'native-export') --database $database
 if ($LASTEXITCODE -ne 0) { throw 'Native export failed' }
 & $helper --compare-export (Join-Path $env:RUNNER_TEMP 'native-comparison') --database $database --days 7

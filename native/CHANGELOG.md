@@ -1,5 +1,8 @@
 ## 0.4.2-preview
 
+- Fixes tray restoration by showing the native Windows window directly before waking the renderer; X now hides to the tray, left-click restores, right-click opens the menu, and explicit Exit closes the desktop cleanly.
+- Adds a Windows tray lifecycle check covering X, minimise, Open, Settings and Exit while hidden, without changing clock-service state.
+
 - Adds manual server reordering in Settings with Move up/down controls; saves the complete source entries in that order and uses it as Overview’s default sort.
 
 - Redesigns the desktop with sidebar navigation, source and clock summary cards, a sortable live source table, and a dedicated settings page.

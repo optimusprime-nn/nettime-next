@@ -40,5 +40,6 @@ jobs:
             native/target/release/NetTimeNextNative*.exe
             dist/NetTimeNext-Rust-0.4.2-Preview-Setup-x64.exe
             dist/rust-clock-response.json
+            dist/rust-tray-lifecycle.json
             dist/rust-build-manifest.json
             dist/RUST-SHA256SUMS.txt
