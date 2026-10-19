@@ -68,11 +68,15 @@ impl Desktop {
             "All listed endpoints are checked and logged. NTP uses UDP; NTS adds authenticated time and TLS key exchange.",
         );
         let mut remove = None;
+        let mut move_to = None;
+        let source_count = self.settings_config.servers.len();
         for (index, source) in self.settings_config.servers.iter_mut().enumerate() {
             ui.push_id(index, |ui| {
                 egui::Frame::group(ui.style()).inner_margin(12).corner_radius(8).show(ui, |ui| {
                     ui.horizontal_wrapped(|ui| {
                         ui.strong(format!("Source {}", index + 1));
+                        if ui.add_enabled(index > 0, egui::Button::new("Move up").small()).clicked() { move_to = Some((index, index - 1)); }
+                        if ui.add_enabled(index + 1 < source_count, egui::Button::new("Move down").small()).clicked() { move_to = Some((index, index + 1)); }
                         ui.label("Host / IP");
                         ui.add(egui::TextEdit::singleline(&mut source.host).desired_width(230.));
                         ui.label("NTP port");
@@ -98,6 +102,8 @@ impl Desktop {
         }
         if let Some(index) = remove {
             self.settings_config.servers.remove(index);
+        } else if let Some((from, to)) = move_to {
+            self.settings_config.servers.swap(from, to);
         }
         if ui
             .add_enabled(
@@ -109,6 +115,7 @@ impl Desktop {
             self.settings_config.servers.push(Server::default());
         }
         ui.add_space(8.);
+        ui.weak("Move up or down to choose the saved order, then Save and apply. Overview follows this order when Configured order is selected.");
         ui.weak("Set groups according to independent upstream clocks. Different IP addresses or stratum values alone do not establish independence.");
         ui.weak("A source requiring NTS will report authentication failures rather than silently fall back to plain NTP.");
     }

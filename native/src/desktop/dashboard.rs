@@ -193,36 +193,57 @@ impl Desktop {
                 ui.label("Sort by");
                 egui::ComboBox::from_id_salt("source_order")
                     .selected_text(
-                        ["Server", "Lowest round trip", "Smallest offset"][self.source_sort],
+                        [
+                            "Configured order",
+                            "Server name",
+                            "Lowest round trip",
+                            "Smallest offset",
+                        ][self.source_sort],
                     )
                     .show_ui(ui, |ui| {
-                        for (i, name) in ["Server", "Lowest round trip", "Smallest offset"]
-                            .iter()
-                            .enumerate()
+                        for (i, name) in [
+                            "Configured order",
+                            "Server name",
+                            "Lowest round trip",
+                            "Smallest offset",
+                        ]
+                        .iter()
+                        .enumerate()
                         {
                             ui.selectable_value(&mut self.source_sort, i, *name);
                         }
                     });
             });
             peers.sort_by(|a, b| {
-                let key = if self.source_sort == 1 {
+                if self.source_sort == 0 {
+                    let position = |key: &str| {
+                        self.config
+                            .servers
+                            .iter()
+                            .position(|s| s.key() == key)
+                            .unwrap_or(usize::MAX)
+                    };
+                    return position(&a.0)
+                        .cmp(&position(&b.0))
+                        .then_with(|| a.0.cmp(&b.0));
+                }
+                if self.source_sort == 1 {
+                    return a.0.cmp(&b.0);
+                }
+                let key = if self.source_sort == 2 {
                     "delay_ms"
                 } else {
                     "offset_ms"
                 };
-                if self.source_sort == 0 {
-                    a.0.cmp(&b.0)
-                } else {
-                    let value = |v: &Value| {
-                        v[key]
-                            .as_f64()
-                            .map(|n| if self.source_sort == 2 { n.abs() } else { n })
-                            .unwrap_or(f64::INFINITY)
-                    };
-                    value(&a.1)
-                        .total_cmp(&value(&b.1))
-                        .then_with(|| a.0.cmp(&b.0))
-                }
+                let value = |v: &Value| {
+                    v[key]
+                        .as_f64()
+                        .map(|n| if self.source_sort == 3 { n.abs() } else { n })
+                        .unwrap_or(f64::INFINITY)
+                };
+                value(&a.1)
+                    .total_cmp(&value(&b.1))
+                    .then_with(|| a.0.cmp(&b.0))
             });
             let mut clicked = None;
             egui::ScrollArea::horizontal().id_salt("source_table_scroll").show(ui, |ui| {

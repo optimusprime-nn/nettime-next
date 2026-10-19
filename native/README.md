@@ -13,6 +13,8 @@ It displays clock mode, source agreement, all configured endpoints and retained
 history with UTC labels. Technical evidence is available in a collapsed panel.
 Dark/light appearance and interface size are saved for the current Windows user;
 `--compact` opens a smaller window, with summary cards adapting to its width.
+Servers can be moved up and down in Settings; Save and apply preserves that order,
+and Overview follows it by default through its Configured order option.
 Settings drafts are separate from the history source being viewed and survive
 page changes. Save and apply is the explicit service configuration action.
 

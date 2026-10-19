@@ -1,5 +1,7 @@
 ## 0.4.2-preview
 
+- Adds manual server reordering in Settings with Move up/down controls; saves the complete source entries in that order and uses it as Overview’s default sort.
+
 - Redesigns the desktop with sidebar navigation, source and clock summary cards, a sortable live source table, and a dedicated settings page.
 - Adds source-history ranges, UTC chart labels, readable source-selection and clock-action explanations, and collapsed technical evidence.
 - Groups settings into Time sources, Collection & history, Clock control, Windows service, and Appearance; keeps unsaved edits separate from the selected history source.
