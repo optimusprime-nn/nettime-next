@@ -1,4 +1,4 @@
-# NetTime Next — native Rust preview 0.4.1
+# NetTime Next — native Rust preview 0.4.2
 
 Native Rust desktop and Windows service, with no Python runtime or Python
 subprocess. The MSVC runtime is linked statically and packaging checks the
@@ -7,6 +7,14 @@ actual executable import tables. This remains an unsigned preview; full RFC
 The desktop uses native Direct3D with a built-in Windows software adapter
 fallback, including server or remote sessions without an OpenGL driver.
 `--software-rendering` explicitly exercises that fallback in launch tests.
+
+The desktop has an Overview dashboard, Source comparison, and grouped Settings.
+It displays clock mode, source agreement, all configured endpoints and retained
+history with UTC labels. Technical evidence is available in a collapsed panel.
+Dark/light appearance and interface size are saved for the current Windows user;
+`--compact` opens a smaller window, with summary cards adapting to its width.
+Settings drafts are separate from the history source being viewed and survive
+page changes. Save and apply is the explicit service configuration action.
 
 ## Clock ownership
 
@@ -42,7 +50,7 @@ the native service; history and settings are retained.
 
 Settings edits the native Windows service configuration: source address,
 NTP port, NTS policy and key-exchange port, independent source group, polling,
-timeout, retention, source-distance and clock limits. **Apply settings** validates
+timeout, retention, source-distance and clock limits. **Save and apply** validates
 the request before stopping a running service and restores the previous
 configuration on failure. Saving or importing settings always selects observation;
 only the separate takeover action grants ownership. Restore ownership before
@@ -50,7 +58,7 @@ changing the settings of an active controller. The current Python service's
 settings can be imported without modifying that service.
 
 The desktop can switch between native and current service evidence. Source
-comparison supports 24 hours, seven days and all retained history, including
+comparison supports one hour, 24 hours, seven days and all retained history, including
 valid-attempt percentage, coverage, median and P95 offset/delay, offset variation,
 stratum range/changes, authentication coverage, selected duration, failures,
 selection/rejection reasons and a selection-change timeline. Offset plots show
@@ -61,11 +69,11 @@ duration after three poll intervals rather than crediting service downtime.
 
 ## Install and commands
 
-Run `NetTimeNext-Rust-0.4.1-Preview-Setup-x64.exe`. The default service task
+Run `NetTimeNext-Rust-0.4.2-Preview-Setup-x64.exe`. The default service task
 registers and starts `NetTimeNextNativePreview` automatically as LocalService,
 using `ProgramData\NetTimeNextNativePreview`. The existing service name is kept
 for preview upgrade compatibility. Native evidence stays in its own database;
-the Python history remains available from **View current service**.
+the Python history remains available from **Previous service**.
 
 `NetTimeNextNativeService.exe --help` lists commands. Administrative commands:
 

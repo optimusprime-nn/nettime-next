@@ -28,7 +28,7 @@ jobs:
         working-directory: native
         run: cargo clippy --locked --all-targets -- -D warnings
       - name: Native installed service lifecycle
-        run: ./native/test-installed.ps1 -Installer ./dist/NetTimeNext-Rust-0.4.1-Preview-Setup-x64.exe
+        run: ./native/test-installed.ps1 -Installer ./dist/NetTimeNext-Rust-0.4.2-Preview-Setup-x64.exe
       - name: Native desktop launch check
         run: |
           $desktop = Start-Process ./native/target/release/NetTimeNextNative.exe -ArgumentList '--smoke-ui --software-rendering' -Wait -PassThru
@@ -38,7 +38,7 @@ jobs:
           name: Rust-native-preview-x64
           path: |
             native/target/release/NetTimeNextNative*.exe
-            dist/NetTimeNext-Rust-0.4.1-Preview-Setup-x64.exe
+            dist/NetTimeNext-Rust-0.4.2-Preview-Setup-x64.exe
             dist/rust-clock-response.json
             dist/rust-build-manifest.json
             dist/RUST-SHA256SUMS.txt

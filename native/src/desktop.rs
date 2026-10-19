@@ -1,4 +1,8 @@
+mod dashboard;
 mod panels;
+mod reports;
+mod settings;
+mod style;
 use crate::{
     comparison::{self, Report},
     ownership::Services,
@@ -44,6 +48,14 @@ struct Desktop {
     operation: Option<std::sync::mpsc::Receiver<std::result::Result<String, String>>>,
     message: String,
     report_peer: String,
+    settings_config: Config,
+    settings_tab: usize,
+    source_sort: usize,
+    history_hours: f64,
+    zoom: f32,
+    native_service_state: String,
+    dirty_settings: bool,
+    reload_after_operation: bool,
 }
 pub fn run(
     database: PathBuf,
@@ -88,7 +100,11 @@ pub fn run(
             ..Default::default()
         },
         viewport: egui::ViewportBuilder::default()
-            .with_inner_size([1320., 850.])
+            .with_inner_size(if std::env::args().any(|a| a == "--compact") {
+                [1000., 720.]
+            } else {
+                [1440., 1000.]
+            })
             .with_min_inner_size([900., 600.]),
         ..Default::default()
     };
@@ -96,9 +112,10 @@ pub fn run(
         &format!("NetTime Next {} · Rust", env!("CARGO_PKG_VERSION")),
         options,
         Box::new(move |cc| {
-            cc.egui_ctx.set_visuals(egui::Visuals::dark());
-            cc.egui_ctx
-                .send_viewport_cmd(ViewportCommand::SetTheme(egui::SystemTheme::Dark));
+            let appearance = style::Preferences::load();
+            style::apply(&cc.egui_ctx, appearance.dark);
+            style::install_fonts(&cc.egui_ctx);
+            cc.egui_ctx.set_zoom_factor(appearance.zoom);
             let actions = Arc::new(Mutex::new(vec![]));
             let queue = actions.clone();
             let context = cc.egui_ctx.clone();
@@ -173,14 +190,17 @@ pub fn run(
             };
             Ok(Box::new(Desktop {
                 database,
+                settings_config: Config::load(&crate::service::root().join("settings.json"))
+                    .unwrap_or_else(|_| cfg.clone()),
                 config: cfg,
                 decision: None,
                 error: String::new(),
                 selected: String::new(),
                 history: vec![],
                 last: Instant::now() - Duration::from_secs(5),
-                settings: screen == "settings",
-                dark: true,
+                settings: ["settings", "collection", "clock", "service", "appearance"]
+                    .contains(&screen.as_str()),
+                dark: appearance.dark,
                 tray,
                 _open: open,
                 _settings_item: settings_item,
@@ -196,6 +216,19 @@ pub fn run(
                 operation: None,
                 message: configuration_error,
                 report_peer: String::new(),
+                settings_tab: match screen.as_str() {
+                    "collection" => 1,
+                    "clock" => 2,
+                    "service" => 3,
+                    "appearance" => 4,
+                    _ => 0,
+                },
+                source_sort: 0,
+                history_hours: 24.,
+                zoom: appearance.zoom,
+                native_service_state: "Checking service…".into(),
+                dirty_settings: false,
+                reload_after_operation: false,
             }))
         }),
     )
@@ -235,9 +268,33 @@ impl Desktop {
             }
             Err(e) => self.error = e.to_string(),
         };
+        if let Some(d) = &self.decision {
+            let peers = dashboard::rows(d);
+            if !peers.iter().any(|(key, _)| *key == self.selected) {
+                self.selected = d["selected"]
+                    .as_str()
+                    .map(String::from)
+                    .or_else(|| peers.first().map(|(key, _)| key.clone()))
+                    .unwrap_or_default();
+            }
+        }
+        self.native_service_state = crate::ownership::WindowsServices
+            .snapshot(crate::service::NAME)
+            .map(|s| {
+                if !s.exists {
+                    "Rust service not installed"
+                } else if s.running {
+                    "Rust service running"
+                } else {
+                    "Rust service stopped"
+                }
+                .to_string()
+            })
+            .unwrap_or_else(|_| "Rust service status unavailable".into());
         self.load_history();
     }
     fn load_history(&mut self) {
+        self.history.clear();
         if let Some(s) = self
             .config
             .servers
@@ -296,82 +353,153 @@ impl eframe::App for Desktop {
             self.last = Instant::now();
         }
         ctx.request_repaint_after(Duration::from_millis(250));
-        egui::TopBottomPanel::top("header").show(ctx, |ui| {
-            ui.add_space(10.);
-            ui.horizontal(|ui| {
-                ui.heading("NetTime Next");
-                ui.label("Rust preview");
-                if ui.button("Settings").clicked() {
-                    self.open_settings();
-                }
-                if ui.checkbox(&mut self.dark, "Dark mode").changed() {
-                    ctx.set_visuals(if self.dark {
-                        egui::Visuals::dark()
-                    } else {
-                        egui::Visuals::light()
-                    });
-                    ctx.send_viewport_cmd(ViewportCommand::SetTheme(if self.dark {
-                        egui::SystemTheme::Dark
-                    } else {
-                        egui::SystemTheme::Light
-                    }));
-                }
-                if ui.button("Refresh").clicked() {
-                    self.refresh();
-                }
+        egui::TopBottomPanel::bottom("footer").show(ctx, |ui| {
+            ui.horizontal_wrapped(|ui| {
+                ui.small(&self.native_service_state);
+                ui.separator();
+                ui.small("Collection continues when this window is closed");
+                ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                    ui.small(format!("v{}", env!("CARGO_PKG_VERSION")));
+                });
             });
-            ui.label("Windows service continues while this desktop window is closed.");
-            ui.label(format!(
-                "Viewing: {}",
-                if self.database.starts_with(crate::service::root()) {
-                    "Native Rust service"
-                } else {
-                    "Current NetTime Next service"
+        });
+        egui::SidePanel::left("navigation")
+            .exact_width(184.)
+            .resizable(false)
+            .show(ctx, |ui| {
+                ui.add_space(18.);
+                ui.label(
+                    egui::RichText::new("NETTIME")
+                        .size(23.)
+                        .strong()
+                        .color(style::ink(ui, style::BLUE)),
+                );
+                ui.label(
+                    egui::RichText::new("N E X T")
+                        .size(12.)
+                        .color(ui.visuals().weak_text_color()),
+                );
+                ui.add_space(25.);
+                for (page, label) in [(0, "Overview"), (1, "Source comparison"), (2, "Settings")] {
+                    let active = if self.settings {
+                        2
+                    } else {
+                        usize::from(self.comparison)
+                    };
+                    if ui
+                        .add_sized([160., 40.], egui::Button::selectable(active == page, label))
+                        .clicked()
+                    {
+                        match page {
+                            2 => self.open_settings(),
+                            1 => {
+                                self.settings = false;
+                                self.comparison = true;
+                                self.request_report();
+                            }
+                            _ => {
+                                self.settings = false;
+                                self.comparison = false;
+                            }
+                        }
+                    }
                 }
-            ));
-            ui.horizontal(|ui| {
-                if ui.button("View native service").clicked() {
+                ui.add_space(25.);
+                ui.separator();
+                ui.add_space(8.);
+                ui.weak("HISTORY SOURCE");
+                let native = self.database.starts_with(crate::service::root());
+                if ui
+                    .add_sized(
+                        [160., 32.],
+                        egui::Button::selectable(native, "Rust service"),
+                    )
+                    .clicked()
+                {
                     self.change_source(true);
                 }
-                if ui.button("View current service").clicked() {
+                if ui
+                    .add_sized(
+                        [160., 32.],
+                        egui::Button::selectable(!native, "Previous service"),
+                    )
+                    .clicked()
+                {
                     self.change_source(false);
                 }
-                ui.separator();
-                if ui
-                    .selectable_label(!self.comparison, "Live status")
-                    .clicked()
-                {
-                    self.comparison = false;
-                }
-                if ui
-                    .selectable_label(self.comparison, "Source comparison")
-                    .clicked()
-                {
-                    self.comparison = true;
-                    self.request_report();
-                }
+                ui.add_space(10.);
+                ui.small("Switch to compare the two services’ recorded evidence.");
+                ui.with_layout(egui::Layout::bottom_up(egui::Align::LEFT), |ui| {
+                    ui.add_space(12.);
+                    if ui.checkbox(&mut self.dark, "Dark appearance").changed() {
+                        self.save_appearance(ctx);
+                    }
+                    if ui.button("Refresh measurements").clicked() {
+                        self.refresh();
+                    }
+                });
             });
-            ui.add_space(8.);
-        });
-        egui::CentralPanel::default().show(ctx,|ui|{
-            if !self.error.is_empty(){ui.colored_label(egui::Color32::LIGHT_YELLOW,&self.error);}
-            if !self.message.is_empty(){ui.label(&self.message);}
-            if self.comparison {self.comparison_panel(ui);return;}
-            if let Some(d)=&self.decision {
-                ui.strong(d["synchronization"]["explanation"].as_str().unwrap_or_else(||d["explanation"].as_str().unwrap_or("Collecting measurements")));
-                let rows:Vec<(String,Value)>=if let Some(servers)=d["servers"].as_object(){servers.iter().map(|(k,v)|(k.clone(),v.clone())).collect()}else if let Some(servers)=d["servers"].as_array(){servers.iter().map(|s|{let mut latest=s["latest"].clone();if let Some(v)=latest.as_object_mut(){v.insert("reach".into(),s["reach_octal"].clone());}(s["peer"].as_str().unwrap_or("").into(),latest)}).collect()}else{vec![]};
-                let mut selected=None;egui::ScrollArea::horizontal().show(ui,|ui|{egui::Grid::new("server_table").striped(true).min_col_width(70.).show(ui,|ui|{
-                    for title in ["Server","Status","Stratum","Offset ms","RTT ms","Reach","Reference","Security"]{ui.strong(title);}ui.end_row();
-                    for (key,s) in rows {if ui.selectable_label(self.selected==key,&key).clicked(){selected=Some(key.clone());}ui.label(s["status"].as_str().unwrap_or("—"));ui.label(s["stratum"].to_string());ui.label(number(&s,"offset_ms"));ui.label(number(&s,"delay_ms"));ui.label(s["reach"].as_str().unwrap_or("—"));ui.label(s["reference_id"].as_str().unwrap_or("—"));ui.label(s["authentication_status"].as_str().unwrap_or("Unauthenticated"));ui.end_row();}
-                });});if let Some(s)=selected{self.selected=s;self.load_history();}
-                ui.separator();ui.strong(format!("{} · retained history",if self.selected.is_empty(){"Select a server"}else{&self.selected}));
-                if !self.history.is_empty(){use egui_plot::{Plot,Line,PlotPoints};let points:PlotPoints=self.history.iter().map(|p|[p[0],p[1]]).collect();Plot::new("offset_history").height(230.).y_axis_label("Offset (ms)").x_axis_label("UTC (Unix seconds)").show(ui,|plot|{plot.line(Line::new("Offset",points));});}
-                egui::CollapsingHeader::new("Selection and clock evidence").default_open(true).show(ui,|ui|{egui::ScrollArea::vertical().max_height(240.).show(ui,|ui|{if let Some(d)=&self.decision{ui.monospace(serde_json::to_string_pretty(&d["synchronization"]).unwrap_or_default());ui.monospace(serde_json::to_string_pretty(&d["clock_action"]).unwrap_or_default());}});});
-            }else{ui.label("Waiting for service history. The service and settings can be installed independently of this window.");}
-        });
-        if self.settings {
-            self.settings_panel(ctx)
-        }
+        egui::CentralPanel::default()
+            .frame(egui::Frame::central_panel(&ctx.style()).inner_margin(22))
+            .show(ctx, |ui| {
+                ui.horizontal(|ui| {
+                    ui.heading(if self.settings {
+                        "Settings"
+                    } else if self.comparison {
+                        "Source comparison"
+                    } else {
+                        "Clock overview"
+                    });
+                    ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                        style::badge(
+                            ui,
+                            if self.database.starts_with(crate::service::root()) {
+                                "RUST SERVICE"
+                            } else {
+                                "PREVIOUS SERVICE"
+                            },
+                            style::BLUE,
+                        );
+                    });
+                });
+                ui.add_space(8.);
+                if !self.error.is_empty() {
+                    style::card(ui, |ui| {
+                        ui.colored_label(style::AMBER, &self.error);
+                    });
+                }
+                if !self.message.is_empty() {
+                    ui.horizontal_wrapped(|ui| {
+                        if self.operation.is_some() {
+                            ui.spinner();
+                        }
+                        ui.label(&self.message);
+                        if self.operation.is_none() && ui.small_button("Dismiss").clicked() {
+                            self.message.clear();
+                        }
+                    });
+                    ui.add_space(6.);
+                }
+                egui::ScrollArea::vertical()
+                    .id_salt(if self.settings {
+                        "settings_page"
+                    } else if self.comparison {
+                        "comparison_page"
+                    } else {
+                        "overview_page"
+                    })
+                    .auto_shrink([false, false])
+                    .show(ui, |ui| {
+                        ui.set_min_width(ui.available_width());
+                        if self.settings {
+                            self.settings_page(ui, ctx);
+                        } else if self.comparison {
+                            self.comparison_panel(ui);
+                        } else {
+                            self.dashboard(ui);
+                        }
+                    });
+            });
         if self.smoke {
             ctx.send_viewport_cmd(ViewportCommand::Close);
         }

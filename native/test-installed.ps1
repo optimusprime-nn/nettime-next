@@ -24,7 +24,7 @@ if ($service.StartName -ne 'NT AUTHORITY\LocalService') { throw 'Unexpected nati
 Start-Sleep -Seconds 3
 $database=Join-Path $root 'data/history.sqlite3'
 & (Join-Path $PSScriptRoot 'test-takeover.ps1') -Helper $helper -Root $root
-foreach ($screen in @('--smoke-ui','--smoke-settings','--smoke-comparison')) {
+foreach ($screen in @('--smoke-ui','--smoke-settings','--smoke-comparison','--smoke-collection','--smoke-clock','--smoke-service','--smoke-appearance')) {
     $arguments="$screen --software-rendering --config `"$(Join-Path $root 'settings.json')`" --database `"$database`""
     $desktop=Start-Process -FilePath (Join-Path $app 'NetTimeNextNative.exe') -ArgumentList $arguments -Wait -PassThru
     if ($desktop.ExitCode -ne 0) { throw "Installed native desktop failed: $screen" }

@@ -1,12 +1,12 @@
 [Setup]
 AppId={{07B1698E-8815-43DA-B2DA-F90FE6310943}
 AppName=NetTime Next Rust Preview
-AppVersion=0.4.1
+AppVersion=0.4.2
 AppPublisher=NetTime Next Project
 DefaultDirName={autopf}\NetTime Next Rust Preview
 DefaultGroupName=NetTime Next Rust Preview
 OutputDir=..\dist
-OutputBaseFilename=NetTimeNext-Rust-0.4.1-Preview-Setup-x64
+OutputBaseFilename=NetTimeNext-Rust-0.4.2-Preview-Setup-x64
 ArchitecturesAllowed=x64compatible
 ArchitecturesInstallIn64BitMode=x64compatible
 PrivilegesRequired=admin

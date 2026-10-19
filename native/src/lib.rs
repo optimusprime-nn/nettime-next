@@ -127,20 +127,23 @@ pub fn run() -> Result<()> {
             monitor.run(Arc::new(AtomicBool::new(false)))
         }
     } else {
+        let screens = [
+            ("--smoke-ui", "live"),
+            ("--smoke-settings", "settings"),
+            ("--smoke-comparison", "comparison"),
+            ("--smoke-collection", "collection"),
+            ("--smoke-clock", "clock"),
+            ("--smoke-service", "service"),
+            ("--smoke-appearance", "appearance"),
+        ];
+        let screen = screens
+            .iter()
+            .find(|(flag, _)| args.iter().any(|a| a == flag));
         desktop::run(
             database,
             config,
-            args.iter().any(|a| {
-                ["--smoke-ui", "--smoke-settings", "--smoke-comparison"].contains(&a.as_str())
-            }),
-            if args.iter().any(|a| a == "--smoke-settings") {
-                "settings"
-            } else if args.iter().any(|a| a == "--smoke-comparison") {
-                "comparison"
-            } else {
-                "live"
-            }
-            .into(),
+            screen.is_some(),
+            screen.map(|(_, name)| *name).unwrap_or("live").into(),
             args.iter().any(|a| a == "--software-rendering"),
         )
     }
