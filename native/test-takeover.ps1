@@ -1,4 +1,4 @@
-param([Parameter(Mandatory=$true)][string]$Helper,[Parameter(Mandatory=$true)][string]$Root)
+param([Parameter(Mandatory=$true)][string]$Helper,[Parameter(Mandatory=$true)][string]$Root,[Parameter(Mandatory=$true)][string]$Installer)
 $ErrorActionPreference='Stop'
 if ($env:GITHUB_ACTIONS -ne 'true' -or $env:RUNNER_ENVIRONMENT -ne 'github-hosted') { throw 'Clock lifecycle tests require a disposable GitHub-hosted runner.' }
 function Invoke-Native([string[]]$Arguments) {
@@ -58,6 +58,27 @@ with sqlite3.connect(sys.argv[1],timeout=10) as db:
     if ($active.mode -ne 'slew' -or $active.ownership.phase -ne 'active' -or -not $active.service.running) { throw 'Native service did not acquire journaled ownership' }
     if ($active.service.account -ne 'NT SERVICE\NetTimeNextNativePreview' -or -not $active.clock_privilege) { throw 'Native service identity/privilege not confined to virtual account' }
     foreach ($state in (Controllers)) { if ($state.running -or $state.start -ne 'Disabled') { throw 'Competing clock controller remains enabled' } }
+    $ownershipHash=(Get-FileHash -LiteralPath (Join-Path $Root 'clock-ownership.json')).Hash
+    $activeRequest=Get-Content -LiteralPath $config -Raw | ConvertFrom-Json
+    $activeRequest.retention_days=14
+    [IO.File]::WriteAllText($request,($activeRequest|ConvertTo-Json -Depth 20),[Text.UTF8Encoding]::new($false))
+    Invoke-Native @('--apply-config',$request) | Out-Null
+    $changed=Health
+    if ($changed.mode -ne 'slew' -or -not $changed.service.running -or $changed.service.account -ne $active.service.account) { throw 'Active settings apply lost clock ownership or service identity' }
+    if ((Get-FileHash -LiteralPath (Join-Path $Root 'clock-ownership.json')).Hash -ne $ownershipHash) { throw 'Settings apply changed the original rollback snapshot' }
+    $appliedHash=(Get-FileHash -LiteralPath $config).Hash
+    $collector=(Get-CimInstance Win32_Service -Filter "Name='NetTimeNextNativePreview'").ProcessId
+    $activeRequest.servers[0].host='changed.invalid'
+    [IO.File]::WriteAllText($request,($activeRequest|ConvertTo-Json -Depth 20),[Text.UTF8Encoding]::new($false))
+    & $Helper --apply-config $request
+    if ($LASTEXITCODE -eq 0) { throw 'Unreachable changed NTS source passed preflight' }
+    if ((Get-FileHash -LiteralPath $config).Hash -ne $appliedHash -or (Get-CimInstance Win32_Service -Filter "Name='NetTimeNextNativePreview'").ProcessId -ne $collector) { throw 'Failed source preflight disturbed the live collector' }
+    $upgrade=Start-Process -FilePath (Resolve-Path $Installer) -ArgumentList '/VERYSILENT /SUPPRESSMSGBOXES /NORESTART /FORCECLOSEAPPLICATIONS /TASKS=observer' -WindowStyle Hidden -Wait -PassThru
+    if ($upgrade.ExitCode -ne 0) { throw 'Owned service upgrade failed' }
+    $upgraded=Health
+    if ($upgraded.mode -ne 'slew' -or -not $upgraded.service.running -or $upgraded.service.account -ne $active.service.account -or -not $upgraded.clock_privilege) { throw 'Owned upgrade lost mode, identity or clock privilege' }
+    if ((Get-FileHash -LiteralPath $config).Hash -ne $appliedHash -or (Get-FileHash -LiteralPath (Join-Path $Root 'clock-ownership.json')).Hash -ne $ownershipHash) { throw 'Owned upgrade changed settings or the rollback snapshot' }
+    foreach ($state in (Controllers)) { if ($state.running -or $state.start -ne 'Disabled') { throw 'Owned upgrade restarted a competing clock controller' } }
     @'
 import sqlite3,sys
 with sqlite3.connect(sys.argv[1],timeout=10) as db:

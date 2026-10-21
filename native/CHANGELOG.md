@@ -1,3 +1,11 @@
+## 0.4.3-preview
+
+- Enables Save and apply during Rust clock ownership, preserving the original takeover journal, service identity, clock rights and disabled competing controllers.
+- Checks changed NTP/NTS sources before pausing the collector; authentication/certificate failures leave the live configuration and process unchanged.
+- Requires enough eligible source groups for the chosen clock policy, including verified independently grouped NTS sources when authentication is mandatory.
+- Adds durable settings-update recovery and exact previous-configuration restoration on restart failure; restarted filters must warm again before correction.
+- Allows the installer to pause/resume the owned native service without reactivating legacy clocks.
+
 ## 0.4.2-preview
 
 - Fixes tray restoration by showing the native Windows window directly before waking the renderer; X now hides to the tray, left-click restores, right-click opens the menu, and explicit Exit closes the desktop cleanly.

@@ -9,7 +9,7 @@ $app=Join-Path $env:ProgramFiles 'NetTime Next Rust Preview'
 $helper=Join-Path $app 'NetTimeNextNativeService.exe'
 & $helper --stop-service
 if ($LASTEXITCODE -ne 0) { throw 'Could not stop native observer before fixture configuration' }
-$fixture=@{servers=@(@{host='ntp.invalid';security='nts_required';source_group='fixture'});poll_seconds=64;timeout_seconds=1;retention_days=7;max_distance_ms=1000;clock=@{mode='observe'}}
+$fixture=@{servers=@(@{host='one.invalid';security='nts_required';source_group='fixture-one'},@{host='two.invalid';security='nts_required';source_group='fixture-two'},@{host='three.invalid';security='nts_required';source_group='fixture-three'});poll_seconds=64;timeout_seconds=1;retention_days=7;max_distance_ms=1000;clock=@{mode='observe'}}
 [IO.File]::WriteAllText((Join-Path $root 'settings.json'),($fixture|ConvertTo-Json -Depth 10),[Text.UTF8Encoding]::new($false))
 & $helper --start-service
 if ($LASTEXITCODE -ne 0) { throw 'Native service start failed' }
@@ -23,7 +23,7 @@ if ($service.State -ne 'Running') { throw 'Native service did not run' }
 if ($service.StartName -ne 'NT AUTHORITY\LocalService') { throw 'Unexpected native service identity' }
 Start-Sleep -Seconds 3
 $database=Join-Path $root 'data/history.sqlite3'
-& (Join-Path $PSScriptRoot 'test-takeover.ps1') -Helper $helper -Root $root
+& (Join-Path $PSScriptRoot 'test-takeover.ps1') -Helper $helper -Root $root -Installer (Resolve-Path $Installer).Path
 foreach ($screen in @('--smoke-ui','--smoke-settings','--smoke-comparison','--smoke-collection','--smoke-clock','--smoke-service','--smoke-appearance')) {
     $arguments="$screen --software-rendering --config `"$(Join-Path $root 'settings.json')`" --database `"$database`""
     $desktop=Start-Process -FilePath (Join-Path $app 'NetTimeNextNative.exe') -ArgumentList $arguments -Wait -PassThru

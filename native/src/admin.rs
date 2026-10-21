@@ -1,9 +1,8 @@
 //! Administrative commands live in the helper; desktop requests UAC and waits off-thread.
 use crate::{
     config::Config,
-    ownership::{self, Services, WindowsServices},
+    ownership::{self, WindowsServices},
     service,
-    storage::Store,
     windows::{Handle, atomic_write, check, require_admin, wide},
 };
 use anyhow::{Result, ensure};
@@ -59,6 +58,7 @@ pub fn dispatch(args: &[String]) -> Result<bool> {
             "--stop-service",
             "--remove-service",
             "--prepare-upgrade",
+            "--finish-upgrade",
         ]
         .contains(s)
     }) else {
@@ -66,10 +66,23 @@ pub fn dispatch(args: &[String]) -> Result<bool> {
     };
     require_admin()?;
     let _lock = Lock::new()?;
+    if !["--prepare-upgrade", "--finish-upgrade", "--rollback"].contains(&command) {
+        ensure!(
+            !crate::upgrade::pending()?,
+            "A service upgrade is in progress; finish it before changing settings"
+        );
+        crate::settings_update::recover(&service::root(), &mut WindowsServices)?;
+    }
     let result = match command {
         "--takeover" => ownership::activate(&service::root(), &mut WindowsServices),
         "--rollback" => ownership::rollback(&service::root(), &mut WindowsServices),
-        "--import-settings" => apply_config(&crate::config::machine_root().join("settings.json")),
+        "--import-settings" => {
+            ensure!(
+                !ownership::active(&service::root())?,
+                "Restore previous clocks before importing another service's settings"
+            );
+            apply_config(&crate::config::machine_root().join("settings.json"))
+        }
         "--apply-config" => {
             ensure!(args.len() == 2, "Supply one settings request file");
             apply_config(Path::new(&args[1]))
@@ -78,17 +91,8 @@ pub fn dispatch(args: &[String]) -> Result<bool> {
         "--start-service" => service::action("start").map(|_| ()),
         "--stop-service" => service::action("stop").map(|_| ()),
         "--remove-service" => service::action("remove").map(|_| ()),
-        "--prepare-upgrade" => {
-            ensure!(
-                ownership::journal(&service::root())?.is_none_or(|j| j.phase == "rolled_back"),
-                "Restore previous clocks before upgrading the native service"
-            );
-            if WindowsServices.snapshot(service::NAME)?.exists {
-                WindowsServices.change(service::NAME, false)
-            } else {
-                Ok(())
-            }
-        }
+        "--prepare-upgrade" => crate::upgrade::prepare(),
+        "--finish-upgrade" => crate::upgrade::finish(),
         _ => unreachable!(),
     };
     let message = match &result {
@@ -105,47 +109,16 @@ pub fn dispatch(args: &[String]) -> Result<bool> {
     Ok(true)
 }
 pub fn apply_config(source: &Path) -> Result<()> {
-    let root = service::root();
-    ensure!(
-        !ownership::active(&root)?
-            && ownership::journal(&root)?.is_none_or(|j| j.phase == "rolled_back"),
-        "Restore previous clocks before changing service settings"
-    );
     ensure!(
         std::fs::metadata(source)?.len() <= 1_048_576,
         "Settings file exceeds 1 MB"
     );
-    let bytes = std::fs::read(source)?;
-    let text = std::str::from_utf8(&bytes)?.trim_start_matches('\u{feff}');
-    let mut cfg: Config = serde_json::from_str(text)?;
-    cfg.validate()?;
-    // Saving settings never authorizes clock takeover, even if the request says slew.
-    cfg.clock.mode = "observe".into();
-    let target = root.join("settings.json");
-    let previous = std::fs::read(&target)?;
-    let own = WindowsServices.snapshot(service::NAME)?;
-    ensure!(own.exists, "Register the native Windows service first");
-    if own.running {
-        WindowsServices.change(service::NAME, false)?;
-    }
-    let result = (|| -> Result<()> {
-        atomic_write(&target, &serde_json::to_vec_pretty(&cfg)?)?;
-        if own.running {
-            WindowsServices.change(service::NAME, true)?;
-        }
-        Store::open(&root.join("data/history.sqlite3"),false)?.event("settings_applied",&serde_json::json!({"clock_mode":"observe","servers":cfg.servers,"retention_days":cfg.retention_days}))?;
-        Ok(())
-    })();
-    if let Err(error) = result {
-        WindowsServices.change(service::NAME, false)?;
-        atomic_write(&target, &previous)?;
-        if own.running {
-            WindowsServices.change(service::NAME, true)?;
-        }
-        anyhow::bail!("Settings could not be applied; previous configuration restored: {error:#}");
-    }
-    Ok(())
+    let request = Config::load(source)?;
+    crate::settings_update::apply(&service::root(), source, &mut WindowsServices, |server| {
+        crate::settings_update::probe(server, request.timeout_seconds, request.poll_seconds)
+    })
 }
+
 fn quote(value: &str) -> String {
     // CommandLineToArgvW escaping, including backslashes before a closing quote.
     let mut result = String::from("\"");

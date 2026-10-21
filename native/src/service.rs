@@ -87,9 +87,18 @@ fn service_main(_args: Vec<OsString>) {
 pub fn install() -> Result<()> {
     crate::windows::require_admin()?;
     anyhow::ensure!(
-        crate::ownership::journal(&root())?.is_none_or(|j| j.phase == "rolled_back"),
-        "Restore previous clocks before upgrading the native service"
+        crate::ownership::journal(&root())?
+            .is_none_or(|j| ["active", "rolled_back"].contains(&j.phase.as_str())),
+        "Clock ownership restoration is incomplete"
     );
+    let owned = crate::ownership::active(&root())?;
+    if owned {
+        anyhow::ensure!(
+            crate::ownership::guard(&root(), &mut crate::ownership::WindowsServices)?
+                && Config::load(&root().join("settings.json"))?.clock.mode == "slew",
+            "Clock ownership conflict; service upgrade refused"
+        );
+    }
     let manager = ServiceManager::local_computer(
         None::<&str>,
         ServiceManagerAccess::CONNECT | ServiceManagerAccess::CREATE_SERVICE,
@@ -103,7 +112,11 @@ pub fn install() -> Result<()> {
         executable_path: std::env::current_exe()?.with_file_name("NetTimeNextNativeService.exe"),
         launch_arguments: vec!["--service".into()],
         dependencies: vec![],
-        account_name: Some("NT AUTHORITY\\LocalService".into()),
+        account_name: Some(if owned {
+            crate::ownership::account().into()
+        } else {
+            "NT AUTHORITY\\LocalService".into()
+        }),
         account_password: None,
     };
     let service =

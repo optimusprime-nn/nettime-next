@@ -1,4 +1,4 @@
-# NetTime Next — native Rust preview 0.4.2
+# NetTime Next — native Rust preview 0.4.3
 
 Native Rust desktop and Windows service, with no Python runtime or Python
 subprocess. The MSVC runtime is linked statically and packaging checks the
@@ -52,8 +52,9 @@ tests verify each takeover mutation and retryable rollback.
 
 Restore previous clocks reinstates exact saved configuration bytes and prior
 service states and removes only the clock right added by the transaction.
-Incomplete restoration retains the journal for retry. Upgrade is blocked until
-an active transaction is restored. Uninstall restores ownership before removing
+Incomplete restoration retains the journal for retry. Upgrades pause and resume
+only the native collector and preserve an existing active ownership transaction.
+Uninstall restores ownership before removing
 the native service; history and settings are retained.
 
 ## Settings and comparison
@@ -62,9 +63,15 @@ Settings edits the native Windows service configuration: source address,
 NTP port, NTS policy and key-exchange port, independent source group, polling,
 timeout, retention, source-distance and clock limits. **Save and apply** validates
 the request before stopping a running service and restores the previous
-configuration on failure. Saving or importing settings always selects observation;
-only the separate takeover action grants ownership. Restore ownership before
-changing the settings of an active controller. The current Python service's
+configuration on failure. Saving preserves existing clock ownership; saving
+without active ownership stays
+in observation mode. Only the separate takeover action grants ownership. While
+controlling, changed sources must pass an independent response/authentication
+check before the collector stops. Failed checks leave the live collector running;
+failed restarts restore the exact previous settings and restart the collector.
+Interrupted updates are recovered by the next administrator action. Fresh filters
+are required after restart. Importing another service’s settings still requires
+restoring clock ownership first. The current Python service's
 settings can be imported without modifying that service.
 
 The desktop can switch between native and current service evidence. Source
@@ -79,7 +86,7 @@ duration after three poll intervals rather than crediting service downtime.
 
 ## Install and commands
 
-Run `NetTimeNext-Rust-0.4.2-Preview-Setup-x64.exe`. The default service task
+Run `NetTimeNext-Rust-0.4.3-Preview-Setup-x64.exe`. The default service task
 registers and starts `NetTimeNextNativePreview` automatically as LocalService,
 using `ProgramData\NetTimeNextNativePreview`. The existing service name is kept
 for preview upgrade compatibility. Native evidence stays in its own database;

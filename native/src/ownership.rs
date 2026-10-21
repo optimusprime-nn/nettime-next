@@ -437,6 +437,7 @@ pub fn rollback(root: &Path, backend: &mut impl Services) -> Result<()> {
         return Ok(());
     };
     if j.phase == "rolled_back" {
+        crate::settings_update::ownership_restored(root)?;
         return Ok(());
     }
     j.phase = "rolling_back".into();
@@ -475,6 +476,7 @@ pub fn rollback(root: &Path, backend: &mut impl Services) -> Result<()> {
     save(root, &j)?;
     Store::open(&root.join("data/history.sqlite3"), false)?
         .event("takeover_rolled_back", &json!({"restored":j.controllers}))?;
+    crate::settings_update::ownership_restored(root)?;
     Ok(())
 }
 

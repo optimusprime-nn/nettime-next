@@ -1,12 +1,12 @@
 [Setup]
 AppId={{07B1698E-8815-43DA-B2DA-F90FE6310943}
 AppName=NetTime Next Rust Preview
-AppVersion=0.4.2
+AppVersion=0.4.3
 AppPublisher=NetTime Next Project
 DefaultDirName={autopf}\NetTime Next Rust Preview
 DefaultGroupName=NetTime Next Rust Preview
 OutputDir=..\dist
-OutputBaseFilename=NetTimeNext-Rust-0.4.2-Preview-Setup-x64
+OutputBaseFilename=NetTimeNext-Rust-0.4.3-Preview-Setup-x64
 ArchitecturesAllowed=x64compatible
 ArchitecturesInstallIn64BitMode=x64compatible
 PrivilegesRequired=admin
@@ -39,27 +39,31 @@ Name: "{group}\Uninstall Rust Preview"; Filename: "{uninstallexe}"
 Filename: "{app}\NetTimeNextNative.exe"; Description: "Open the Rust desktop preview"; Flags: nowait postinstall skipifsilent runasoriginaluser
 
 [Code]
+var UpgradingExisting: Boolean;
 function PrepareToInstall(var NeedsRestart: Boolean): String;
-var ResultCode: Integer; JournalText: AnsiString;
+var ResultCode: Integer;
 begin
   Result := '';
-  if FileExists(ExpandConstant('{commonappdata}\NetTimeNextNativePreview\clock-ownership.json')) then
-    if (not LoadStringFromFile(ExpandConstant('{commonappdata}\NetTimeNextNativePreview\clock-ownership.json'), JournalText)) or (Pos('"phase": "rolled_back"', String(JournalText)) = 0) then begin
-      Result := 'Restore previous clock services from Settings before upgrading.';
-      exit;
-    end;
-  if FileExists(ExpandConstant('{app}\NetTimeNextNativeService.exe')) and RegKeyExists(HKLM, 'SYSTEM\CurrentControlSet\Services\NetTimeNextNativePreview') then
-    if (not Exec(ExpandConstant('{app}\NetTimeNextNativeService.exe'), '--stop-service', '', SW_HIDE, ewWaitUntilTerminated, ResultCode)) or (ResultCode <> 0) then
-      Result := 'Restore previous clock services from Settings before upgrading. A service that cannot stop must be resolved before installation.';
+  UpgradingExisting := RegKeyExists(HKLM, 'SYSTEM\CurrentControlSet\Services\NetTimeNextNativePreview');
+  if UpgradingExisting then begin
+    ExtractTemporaryFile('NetTimeNextNativeService.exe');
+    if (not Exec(ExpandConstant('{tmp}\NetTimeNextNativeService.exe'), '--prepare-upgrade', '', SW_HIDE, ewWaitUntilTerminated, ResultCode)) or (ResultCode <> 0) then
+      Result := 'The native collector could not safely pause for upgrade. Existing clock ownership was not transferred. See ProgramData\NetTimeNextNativePreview\admin-result.json.';
+  end;
 end;
 procedure CurStepChanged(CurStep: TSetupStep);
 var ResultCode: Integer;
 begin
-  if (CurStep = ssPostInstall) and WizardIsTaskSelected('observer') then begin
-    if (not Exec(ExpandConstant('{app}\NetTimeNextNativeService.exe'), '--install-service', '', SW_HIDE, ewWaitUntilTerminated, ResultCode)) or (ResultCode <> 0) then
-      RaiseException('Native service registration failed. The active clock service was not changed.');
-    if (not Exec(ExpandConstant('{app}\NetTimeNextNativeService.exe'), '--start-service', '', SW_HIDE, ewWaitUntilTerminated, ResultCode)) or (ResultCode <> 0) then
-      RaiseException('Native service startup failed. See ProgramData\NetTimeNextNativePreview\data\service-error.log.');
+  if CurStep = ssPostInstall then begin
+    if UpgradingExisting then begin
+      if (not Exec(ExpandConstant('{app}\NetTimeNextNativeService.exe'), '--finish-upgrade', '', SW_HIDE, ewWaitUntilTerminated, ResultCode)) or (ResultCode <> 0) then
+        RaiseException('The upgraded collector could not resume. Settings and clock ownership remain saved; review admin-result.json.');
+    end else if WizardIsTaskSelected('observer') then begin
+      if (not Exec(ExpandConstant('{app}\NetTimeNextNativeService.exe'), '--install-service', '', SW_HIDE, ewWaitUntilTerminated, ResultCode)) or (ResultCode <> 0) then
+        RaiseException('Native service registration failed.');
+      if (not Exec(ExpandConstant('{app}\NetTimeNextNativeService.exe'), '--start-service', '', SW_HIDE, ewWaitUntilTerminated, ResultCode)) or (ResultCode <> 0) then
+        RaiseException('Native service startup failed. See ProgramData\NetTimeNextNativePreview\data\service-error.log.');
+    end;
   end;
 end;
 function InitializeUninstall(): Boolean;

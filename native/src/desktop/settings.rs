@@ -52,12 +52,12 @@ impl Desktop {
                 ui.horizontal_wrapped(|ui| {
                     if self.dirty_settings { badge(ui, "UNSAVED CHANGES", AMBER); }
                     else { ui.weak("Settings loaded from the native service."); }
-                    if ui.add_enabled(!busy && self.settings_config.clock.mode == "observe", egui::Button::new("Save and apply…").fill(ui.visuals().selection.bg_fill)).on_disabled_hover_text("Restore previous clocks before editing a controller that owns the clock.").clicked() {
+                    if ui.add_enabled(!busy, egui::Button::new("Save and apply…").fill(ui.visuals().selection.bg_fill)).on_disabled_hover_text("Changes are checked before the collector restarts; existing clock ownership is preserved.").clicked() {
                         self.apply_settings();
                     }
                     if ui.add_enabled(!busy, egui::Button::new("Discard changes / reload")).clicked() { self.dirty_settings = false; self.open_settings(); }
                 });
-                ui.small("Saving validates every setting and requests Windows administrator approval. The Rust collector restarts; retained history is kept. Saving settings leaves the service in measurement mode.");
+                ui.small("Saving requests administrator approval. During clock control, changed sources are tested first. Rust restarts with fresh filters, retains history and keeps ownership; failed updates restore the previous settings.");
             });
         }
     }
@@ -357,7 +357,6 @@ impl Desktop {
         let request = (|| -> Result<PathBuf> {
             let mut cfg = self.settings_config.clone();
             cfg.validate()?;
-            cfg.clock.mode = "observe".into();
             let folder = PathBuf::from(
                 std::env::var_os("LOCALAPPDATA")
                     .ok_or_else(|| anyhow::anyhow!("Local application data is unavailable"))?,
