@@ -122,10 +122,14 @@ impl Desktop {
                         "MEASUREMENT ONLY"
                     } else if stale {
                         "CLOCK STATE NEEDS CHECKING"
-                    } else if mode == "slew" {
-                        "GRADUAL CLOCK CORRECTION"
                     } else {
-                        "CORRECTION SUSPENDED"
+                        match mode {
+                            "slew" => "GRADUAL CLOCK CORRECTION",
+                            "hold" => "WAITING FOR FRESH SAMPLE",
+                            "warmup" => "CLOCK FILTER SETTLING",
+                            "suspend" => "CORRECTION SUSPENDED",
+                            _ => "CLOCK STATE NEEDS CHECKING",
+                        }
                     },
                     BLUE,
                 );
@@ -369,6 +373,8 @@ impl Desktop {
                 match mode {
                     "observe" => "Observing only",
                     "slew" => "Gradual correction",
+                    "hold" => "Waiting for a fresh sample; retaining the current correction rate",
+                    "warmup" => "Clock filter settling; correction paused",
                     "suspend" => "Correction suspended",
                     other => other,
                 }
