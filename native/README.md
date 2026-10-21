@@ -21,6 +21,10 @@ X and minimise hide the desktop in the system tray. Left-click its clock icon
 to reopen it; right-click for Open, Settings and Exit desktop app. Exit closes
 only the desktop. If the tray cannot be created, X closes the desktop normally
 and minimising leaves it accessible on the taskbar.
+To also show the desktop's tray icon at Windows sign-in, run
+`native/Configure-TrayStartup.ps1` from the source checkout. It creates a
+current-user Startup shortcut configured to launch the installed desktop
+minimised; the Windows service remains a separate automatic boot service.
 
 ## Clock ownership
 
