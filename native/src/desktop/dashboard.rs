@@ -84,7 +84,7 @@ impl Desktop {
                     "Waiting for measurements",
                     "The dashboard will fill as soon as the selected service records a check.",
                 );
-                ui.label("Open Settings → Windows service to check or start the Rust collector.");
+                ui.label("Open Settings → Windows service to check or start the collector.");
             });
             return;
         };
@@ -105,6 +105,15 @@ impl Desktop {
         let mode = d["clock_action"]["action"].as_str().unwrap_or("unknown");
         card(ui, |ui| {
             ui.horizontal_wrapped(|ui| {
+                ui.label(
+                    egui::RichText::new(if selected.is_empty() {
+                        "No source selected".to_string()
+                    } else {
+                        format!("Source  {selected}")
+                    })
+                    .size(18.)
+                    .strong(),
+                );
                 badge(
                     ui,
                     if stale {
@@ -134,16 +143,6 @@ impl Desktop {
                     BLUE,
                 );
             });
-            ui.add_space(4.);
-            ui.label(
-                egui::RichText::new(if selected.is_empty() {
-                    "No source selected".to_string()
-                } else {
-                    format!("Recommended source  {selected}")
-                })
-                .size(22.)
-                .strong(),
-            );
             ui.label(
                 sync["explanation"]
                     .as_str()
@@ -153,7 +152,10 @@ impl Desktop {
             if stale {
                 ui.colored_label(style::ink(ui, AMBER), "This is retained evidence, not a current clock-health assessment. Check the service below.");
             } else if mode == "observe" {
-                ui.weak("The Rust service is observing your clock. Existing time services remain responsible for adjustment.");
+                ui.weak("The service is observing your clock. Existing time services remain responsible for adjustment.");
+            }
+            if !self.config.logging_enabled {
+                ui.weak("History logging is off. Live measurements and clock control continue; existing history still expires at the configured limit.");
             }
         });
         ui.add_space(8.);
@@ -181,8 +183,12 @@ impl Desktop {
                 ),
                 (
                     "HISTORY RETENTION",
-                    format!("{:.0} days", self.config.retention_days),
-                    "Measurements and selection reasons".into(),
+                    if self.config.logging_enabled {
+                        format!("{:.0} days", self.config.retention_days)
+                    } else {
+                        "Logging off".into()
+                    },
+                    "Change in Settings → Collection & history".into(),
                 ),
             ],
         );
@@ -251,7 +257,7 @@ impl Desktop {
             });
             let mut clicked = None;
             egui::ScrollArea::horizontal().id_salt("source_table_scroll").show(ui, |ui| {
-                egui::Grid::new("server_table").striped(true).spacing([18., 10.]).min_row_height(32.).show(ui, |ui| {
+                egui::Grid::new("server_table").striped(true).spacing([14., 6.]).min_row_height(26.).show(ui, |ui| {
                     for title in ["Server", "Response", "Stratum", "Offset · ms", "Round trip · ms", "Reach", "Security", "Next check"] { ui.strong(title); } ui.end_row();
                     for (key, s) in &peers {
                         let is_selected = self.selected == *key;

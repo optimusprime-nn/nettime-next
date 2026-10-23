@@ -24,14 +24,17 @@ pub struct Monitor {
     next_prune: f64,
     clock: Option<crate::clock::Session>,
     instance: String,
+    maintenance: Option<thread::JoinHandle<Result<Value>>>,
+    last_clock_event: String,
 }
 impl Monitor {
-    pub fn new(cfg: Config, store: Store) -> Result<Self> {
+    pub fn new(cfg: Config, mut store: Store) -> Result<Self> {
         // The migration observer must never become a second system clock writer.
         ensure!(
             cfg.clock.mode == "observe",
             "Native migration collector is measurement-only; current service keeps clock ownership"
         );
+        store.configure_logging(&cfg);
         let mut peers: Vec<_> = cfg
             .servers
             .iter()
@@ -60,9 +63,11 @@ impl Monitor {
             cycle,
             last_wall: wall,
             last_mono: now,
-            next_prune: now + 3600.,
+            next_prune: now,
             clock: None,
             instance: String::new(),
+            maintenance: None,
+            last_clock_event: String::new(),
         })
     }
     pub fn for_service(cfg: Config, store: Store, root: &std::path::Path) -> Result<Self> {
@@ -95,6 +100,37 @@ impl Monitor {
             clock.check()?;
         }
         let now = mono();
+        if self
+            .maintenance
+            .as_ref()
+            .is_some_and(|worker| worker.is_finished())
+        {
+            let outcome = self.maintenance.take().unwrap().join();
+            let value = match outcome {
+                Ok(Ok(value)) => value,
+                Ok(Err(error)) => {
+                    json!({"error":format!("{error:#}"),"retry":"next maintenance pass"})
+                }
+                Err(_) => json!({"error":"History maintenance worker ended unexpectedly"}),
+            };
+            if value["deferred"] == true {
+                self.next_prune = now + 5.;
+            } else {
+                if value.get("error").is_some() {
+                    self.next_prune = now + 60.;
+                }
+                self.store.event("history_maintenance", &value)?;
+            }
+        }
+        if now >= self.next_prune && self.maintenance.is_none() {
+            if let Some(path) = self.store.db.path().map(std::path::PathBuf::from) {
+                let days = self.cfg.retention_days;
+                self.maintenance = Some(thread::spawn(move || {
+                    Store::open(&path, false)?.maintain(days)
+                }));
+            }
+            self.next_prune = now + 3600.;
+        }
         let wall = utc();
         let step = (wall - self.last_wall) - (now - self.last_mono);
         if step.abs() > 0.05 {
@@ -108,7 +144,6 @@ impl Monitor {
             if let Some(clock) = &self.clock {
                 clock.update(&selection::Assessment::default(), now)?;
             }
-            self.next_prune = now + 86400.;
         }
         self.last_wall = wall;
         self.last_mono = now;
@@ -139,9 +174,18 @@ impl Monitor {
         let clock_action = if let Some(clock) = &self.clock {
             let plan = clock.update(&assessment, mono())?;
             let action = serde_json::to_value(plan)?;
-            let mut evidence = action.clone();
-            evidence["assessment"] = serde_json::to_value(&assessment)?;
-            self.store.event("clock_correction", &evidence)?;
+            let label = action["action"].as_str().unwrap_or("");
+            let signature = format!("{}:{}", label, action["reason"]);
+            if self.cfg.diagnostic_logging || label == "slew" || signature != self.last_clock_event
+            {
+                let mut evidence = action.clone();
+                evidence["selected"] = json!(assessment.selected);
+                if self.cfg.diagnostic_logging {
+                    evidence["assessment"] = serde_json::to_value(&assessment)?;
+                }
+                self.store.event("clock_correction", &evidence)?;
+                self.last_clock_event = signature;
+            }
             action
         } else {
             json!({"action":"observe","reason":"Clock control is off; explicit takeover required"})
@@ -166,10 +210,6 @@ impl Monitor {
         let states=self.peers.iter().map(|p|(p.server.key(),json!({"interval":p.interval,"disabled":p.disabled,"reach":p.reach,"next_utc":utc()+(p.next_due-mono()).max(0.),"nts_failures":p.nts.failures,"nts_retry_utc":utc()+(p.nts.retry_at-mono()).max(0.)}))).collect::<Vec<_>>();
         self.store.save(self.cycle, &samples, &decision, &states)?;
         self.cycle += 1;
-        if mono() >= self.next_prune {
-            self.store.prune(self.cfg.retention_days)?;
-            self.next_prune = mono() + 3600.;
-        }
         Ok(Some(decision))
     }
     pub fn run(&mut self, stop: Arc<AtomicBool>) -> Result<()> {

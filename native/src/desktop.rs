@@ -58,6 +58,9 @@ struct Desktop {
     dirty_settings: bool,
     reload_after_operation: bool,
     exiting: bool,
+    confirm_retention: bool,
+    capture: Option<PathBuf>,
+    capture_requested: bool,
 }
 pub fn run(
     database: PathBuf,
@@ -104,15 +107,15 @@ pub fn run(
         },
         viewport: egui::ViewportBuilder::default()
             .with_inner_size(if std::env::args().any(|a| a == "--compact") {
-                [1000., 720.]
+                [900., 640.]
             } else {
-                [1440., 1000.]
+                [1100., 760.]
             })
-            .with_min_inner_size([900., 600.]),
+            .with_min_inner_size([760., 520.]),
         ..Default::default()
     };
     eframe::run_native(
-        &format!("NetTime Next {} · Rust", env!("CARGO_PKG_VERSION")),
+        &format!("NetTime Next {}", env!("CARGO_PKG_VERSION")),
         options,
         Box::new(move |cc| {
             let appearance = style::Preferences::load();
@@ -156,7 +159,7 @@ pub fn run(
             let icon = tray_icon::Icon::from_rgba(icon_pixels(), 32, 32).ok();
             let tray = icon.and_then(|icon| {
                 TrayIconBuilder::new()
-                    .with_tooltip("NetTime Next · Rust preview")
+                    .with_tooltip("NetTime Next")
                     .with_icon(icon)
                     .with_menu(Box::new(menu))
                     .with_menu_on_left_click(false)
@@ -185,15 +188,18 @@ pub fn run(
             };
             Ok(Box::new(Desktop {
                 database,
-                settings_config: Config::load(&crate::service::root().join("settings.json"))
-                    .unwrap_or_else(|_| cfg.clone()),
+                settings_config: {
+                    let mut draft = Config::load(&crate::service::root().join("settings.json")).unwrap_or_else(|_| cfg.clone());
+                    if screen == "retention" { draft.retention_days = (cfg.retention_days-2.).max(1.); }
+                    draft
+                },
                 config: cfg,
                 decision: None,
                 error: String::new(),
                 selected: String::new(),
                 history: vec![],
                 last: Instant::now() - Duration::from_secs(5),
-                settings: ["settings", "collection", "clock", "service", "appearance"]
+                settings: ["settings", "collection", "retention", "clock", "service", "appearance"]
                     .contains(&screen.as_str()),
                 dark: appearance.dark,
                 tray,
@@ -212,7 +218,7 @@ pub fn run(
                 message: configuration_error,
                 report_peer: String::new(),
                 settings_tab: match screen.as_str() {
-                    "collection" => 1,
+                    "collection" | "retention" => 1,
                     "clock" => 2,
                     "service" => 3,
                     "appearance" => 4,
@@ -225,6 +231,9 @@ pub fn run(
                 dirty_settings: false,
                 reload_after_operation: false,
                 exiting: false,
+                confirm_retention: screen == "retention",
+                capture: std::env::args().position(|a| a == "--capture-ui").and_then(|i| std::env::args().nth(i+1)).map(PathBuf::from),
+                capture_requested: false,
             }))
         }),
     )
@@ -278,15 +287,15 @@ impl Desktop {
             .snapshot(crate::service::NAME)
             .map(|s| {
                 if !s.exists {
-                    "Rust service not installed"
+                    "Service not installed"
                 } else if s.running {
-                    "Rust service running"
+                    "Service running"
                 } else {
-                    "Rust service stopped"
+                    "Service stopped"
                 }
                 .to_string()
             })
-            .unwrap_or_else(|_| "Rust service status unavailable".into());
+            .unwrap_or_else(|_| "Service status unavailable".into());
         self.load_history();
     }
     fn load_history(&mut self) {
@@ -311,6 +320,31 @@ fn number(v: &Value, key: &str) -> String {
 }
 impl eframe::App for Desktop {
     fn update(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
+        // Developer visual check: capture this application's rendered frame only.
+        if self.capture.is_some() {
+            let captured = ctx.input(|i| {
+                i.events.iter().find_map(|event| {
+                    if let egui::Event::Screenshot { image, .. } = event {
+                        Some(image.clone())
+                    } else {
+                        None
+                    }
+                })
+            });
+            if let Some(image) = captured {
+                let path = self.capture.take().unwrap();
+                let mut bytes =
+                    format!("P6\n{} {}\n255\n", image.size[0], image.size[1]).into_bytes();
+                for pixel in &image.pixels {
+                    bytes.extend_from_slice(&[pixel.r(), pixel.g(), pixel.b()]);
+                }
+                if let Err(error) = std::fs::write(path, bytes) {
+                    eprintln!("UI capture failed: {error}");
+                }
+                self.exiting = true;
+                ctx.send_viewport_cmd(ViewportCommand::Close);
+            }
+        }
         self.poll_operations();
         let mut show = false;
         let mut open_settings = false;
@@ -346,7 +380,7 @@ impl eframe::App for Desktop {
             && !self.exiting
             && !self.smoke
             && self.tray.is_some()
-            && (close_requested || ctx.input(|i| i.viewport().minimized.unwrap_or(false)))
+            && close_requested
             && !self.hidden
         {
             self.hidden = true;
@@ -368,7 +402,7 @@ impl eframe::App for Desktop {
             });
         });
         egui::SidePanel::left("navigation")
-            .exact_width(184.)
+            .exact_width(156.)
             .resizable(false)
             .show(ctx, |ui| {
                 ui.add_space(18.);
@@ -391,7 +425,7 @@ impl eframe::App for Desktop {
                         usize::from(self.comparison)
                     };
                     if ui
-                        .add_sized([160., 40.], egui::Button::selectable(active == page, label))
+                        .add_sized([138., 32.], egui::Button::selectable(active == page, label))
                         .clicked()
                     {
                         match page {
@@ -408,31 +442,6 @@ impl eframe::App for Desktop {
                         }
                     }
                 }
-                ui.add_space(25.);
-                ui.separator();
-                ui.add_space(8.);
-                ui.weak("HISTORY SOURCE");
-                let native = self.database.starts_with(crate::service::root());
-                if ui
-                    .add_sized(
-                        [160., 32.],
-                        egui::Button::selectable(native, "Rust service"),
-                    )
-                    .clicked()
-                {
-                    self.change_source(true);
-                }
-                if ui
-                    .add_sized(
-                        [160., 32.],
-                        egui::Button::selectable(!native, "Previous service"),
-                    )
-                    .clicked()
-                {
-                    self.change_source(false);
-                }
-                ui.add_space(10.);
-                ui.small("Switch to compare the two services’ recorded evidence.");
                 ui.with_layout(egui::Layout::bottom_up(egui::Align::LEFT), |ui| {
                     ui.add_space(12.);
                     if ui.checkbox(&mut self.dark, "Dark appearance").changed() {
@@ -444,7 +453,7 @@ impl eframe::App for Desktop {
                 });
             });
         egui::CentralPanel::default()
-            .frame(egui::Frame::central_panel(&ctx.style()).inner_margin(22))
+            .frame(egui::Frame::central_panel(&ctx.style()).inner_margin(12))
             .show(ctx, |ui| {
                 ui.horizontal(|ui| {
                     ui.heading(if self.settings {
@@ -453,17 +462,6 @@ impl eframe::App for Desktop {
                         "Source comparison"
                     } else {
                         "Clock overview"
-                    });
-                    ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                        style::badge(
-                            ui,
-                            if self.database.starts_with(crate::service::root()) {
-                                "RUST SERVICE"
-                            } else {
-                                "PREVIOUS SERVICE"
-                            },
-                            style::BLUE,
-                        );
                     });
                 });
                 ui.add_space(8.);
@@ -504,7 +502,10 @@ impl eframe::App for Desktop {
                         }
                     });
             });
-        if self.smoke {
+        if self.capture.is_some() && !self.capture_requested {
+            ctx.send_viewport_cmd(ViewportCommand::Screenshot(Default::default()));
+            self.capture_requested = true;
+        } else if self.smoke && self.capture.is_none() {
             ctx.send_viewport_cmd(ViewportCommand::Close);
         }
     }

@@ -13,7 +13,7 @@ impl Desktop {
             }
             Err(e) => {
                 self.message = format!(
-                    "Native service settings are unavailable: {e:#}. Install/register the Rust service first."
+                    "Service settings are unavailable: {e:#}. Install/register the Windows service first."
                 )
             }
         }
@@ -97,32 +97,6 @@ impl Desktop {
                 .map_err(|e| format!("{e:#}"));
             let _ = tx.send(report);
         });
-    }
-    pub(super) fn change_source(&mut self, native: bool) {
-        let root = if native {
-            service::root()
-        } else {
-            crate::config::machine_root()
-        };
-        self.config_path = root.join("settings.json");
-        self.database = root.join("data/history.sqlite3");
-        self.decision = None;
-        match Config::load(&self.config_path) {
-            Ok(cfg) => self.config = cfg,
-            Err(e) => {
-                self.config = Config::default();
-                self.message = format!("Service settings unavailable: {e:#}");
-            }
-        };
-        self.selected.clear();
-        self.history.clear();
-        self.report = None;
-        self.report_worker = None;
-        self.report_peer.clear();
-        self.refresh();
-        if self.comparison {
-            self.request_report();
-        }
     }
 }
 

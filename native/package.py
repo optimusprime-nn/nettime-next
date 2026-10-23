@@ -48,8 +48,8 @@ def main():
         packages.append(dict(name=package['name'],version=package['version'],license=package['license'],repository=package['repository'],license_files=licenses))
     (notices/'DEPENDENCIES.json').write_text(json.dumps(packages,indent=2)+'\n',encoding='utf-8')
     run(args.iscc.resolve(),ROOT/'installer.iss')
-    installer=ROOT.parent/'dist'/'NetTimeNext-Rust-0.4.3-Preview-Setup-x64.exe'
-    manifest=dict(version='0.4.3-preview',stage='Validated settings updates and upgrades preserving active clock ownership; changed NTS sources checked before restart',installer=installer.name,
+    installer=ROOT.parent/'dist'/'NetTimeNext-Rust-0.4.4-Preview-Setup-x64.exe'
+    manifest=dict(version='0.4.4-preview',stage='Compact history, configurable logging and retention, 24-hour compression and single-service desktop',installer=installer.name,
                   sha256=hashlib.sha256(installer.read_bytes()).hexdigest(),
                   source_commit=run('git','rev-parse','HEAD',capture=True).strip(),
                   source_dirty=bool(run('git','status','--porcelain','--untracked-files=no',capture=True)),

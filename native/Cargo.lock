@@ -1369,12 +1369,13 @@ dependencies = [
 
 [[package]]
 name = "nettime-next-native"
-version = "0.4.3-preview"
+version = "0.4.4-preview"
 dependencies = [
  "aes-siv",
  "anyhow",
  "eframe",
  "egui_plot",
+ "flate2",
  "getrandom 0.3.4",
  "hex",
  "raw-window-handle",

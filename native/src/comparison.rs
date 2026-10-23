@@ -116,7 +116,7 @@ pub fn build(store: &Store, days: f64, now: f64) -> Result<Report> {
     let snapshot = store.db.unchecked_transaction()?;
     let mut grouped: BTreeMap<String, Vec<Reading>> = BTreeMap::new();
     {
-        let mut q=snapshot.prepare("SELECT utc,host,port,status,stratum,offset_ms,delay_ms,json_extract(payload,'$.authentication_status') FROM samples WHERE utc>=? AND utc<=? ORDER BY utc,id")?;
+        let mut q=snapshot.prepare("SELECT utc,host,port,status,stratum,offset_ms,delay_ms,json_extract(history_json(payload),'$.authentication_status') FROM samples WHERE utc>=? AND utc<=? ORDER BY utc,id")?;
         let mut rows = q.query(params![start, now])?;
         while let Some(r) = rows.next()? {
             let key = format!("{}:{}", r.get::<_, String>(1)?, r.get::<_, u16>(2)?);
@@ -133,14 +133,14 @@ pub fn build(store: &Store, days: f64, now: f64) -> Result<Report> {
     let mut decisions = vec![];
     {
         let mut q = snapshot.prepare(
-            "SELECT utc,payload FROM decisions WHERE utc<? ORDER BY utc DESC,id DESC LIMIT 1",
+            "SELECT utc,history_json(payload) FROM decisions WHERE utc<? ORDER BY utc DESC,id DESC LIMIT 1",
         )?;
         let mut rows = q.query([start])?;
         if let Some(r) = rows.next()? {
             decisions.push(compact(r.get(0)?, &r.get::<_, String>(1)?)?);
         }
         let mut q = snapshot
-            .prepare("SELECT utc,payload FROM decisions WHERE utc>=? AND utc<=? ORDER BY utc,id")?;
+            .prepare("SELECT utc,history_json(payload) FROM decisions WHERE utc>=? AND utc<=? ORDER BY utc,id")?;
         let mut rows = q.query(params![start, now])?;
         while let Some(r) = rows.next()? {
             decisions.push(compact(r.get(0)?, &r.get::<_, String>(1)?)?);
@@ -347,9 +347,11 @@ mod tests {
     use super::*;
     #[test]
     fn windowed_carry_in_expiration_statistics_and_future_exclusion() {
-        let store = Store {
-            db: rusqlite::Connection::open_in_memory().unwrap(),
-        };
+        let store = Store::open(Path::new(":memory:"), false).unwrap();
+        store
+            .db
+            .execute_batch("DROP TABLE samples;DROP TABLE decisions;")
+            .unwrap();
         store.db.execute_batch("CREATE TABLE samples(id INTEGER PRIMARY KEY,utc REAL,host TEXT,port INTEGER,status TEXT,stratum INTEGER,offset_ms REAL,delay_ms REAL,payload TEXT);CREATE TABLE decisions(id INTEGER PRIMARY KEY,utc REAL,payload TEXT);").unwrap();
         for (stamp, offset, stratum, status) in [
             (100., -10., 1, "valid"),

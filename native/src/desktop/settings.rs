@@ -14,7 +14,7 @@ impl Desktop {
         }
     }
     pub(super) fn settings_page(&mut self, ui: &mut egui::Ui, ctx: &egui::Context) {
-        ui.weak("Configure the Rust Windows service. Changes are applied only when you choose Save and apply.");
+        ui.weak("Configure the Windows service. Changes are applied only when you choose Save and apply.");
         ui.add_space(8.);
         ui.horizontal_wrapped(|ui| {
             for (i, title) in [
@@ -51,21 +51,42 @@ impl Desktop {
             card(ui, |ui| {
                 ui.horizontal_wrapped(|ui| {
                     if self.dirty_settings { badge(ui, "UNSAVED CHANGES", AMBER); }
-                    else { ui.weak("Settings loaded from the native service."); }
+                    else { ui.weak("Settings loaded from the service."); }
                     if ui.add_enabled(!busy, egui::Button::new("Save and apply…").fill(ui.visuals().selection.bg_fill)).on_disabled_hover_text("Changes are checked before the collector restarts; existing clock ownership is preserved.").clicked() {
                         self.apply_settings();
                     }
                     if ui.add_enabled(!busy, egui::Button::new("Discard changes / reload")).clicked() { self.dirty_settings = false; self.open_settings(); }
                 });
-                ui.small("Saving requests administrator approval. During clock control, changed sources are tested first. Rust restarts with fresh filters, retains history and keeps ownership; failed updates restore the previous settings.");
+                ui.small("Saving requests administrator approval. During clock control, changed sources are tested first. The service restarts with fresh filters, retains history and keeps ownership; failed updates restore the previous settings.");
             });
+        }
+        if self.confirm_retention {
+            let mut apply = false;
+            let mut cancel = false;
+            egui::Modal::new(egui::Id::new("shorter_retention")).show(ctx, |ui| {
+                ui.heading("Delete older history?");
+                ui.label(format!("You are reducing retention from {:.0} to {:.0} days.", self.config.retention_days, self.settings_config.retention_days));
+                ui.label(format!("Saving will permanently delete measurements, decisions and events older than {:.0} days, including compressed records. This cannot be undone.", self.settings_config.retention_days));
+                ui.label("Export your history first if you want to keep it. Clock ownership and current measurements are preserved.");
+                ui.horizontal(|ui| {
+                    cancel = ui.button("Cancel").clicked();
+                    apply = ui.button("Save and delete older history…").clicked();
+                });
+            });
+            if cancel {
+                self.confirm_retention = false;
+            }
+            if apply {
+                self.confirm_retention = false;
+                self.save_confirmed_settings();
+            }
         }
     }
     fn source_settings(&mut self, ui: &mut egui::Ui) {
         section(
             ui,
             "Time sources",
-            "All listed endpoints are checked and logged. NTP uses UDP; NTS adds authenticated time and TLS key exchange.",
+            "All listed endpoints are checked. NTP uses UDP; NTS adds authenticated time and TLS key exchange.",
         );
         let mut remove = None;
         let mut move_to = None;
@@ -125,6 +146,16 @@ impl Desktop {
             "Collection & history",
             "Keep enough evidence to compare every source and understand each selection decision.",
         );
+        ui.checkbox(
+            &mut self.settings_config.logging_enabled,
+            "Record history and event logs",
+        );
+        ui.small("When off, clock control and live status continue. Only the current status and safety state are kept; existing history still expires at the retention limit.");
+        ui.add_enabled_ui(self.settings_config.logging_enabled, |ui| {
+            ui.checkbox(&mut self.settings_config.diagnostic_logging, "Detailed diagnostic logging");
+            ui.small("Includes packet headers and full decision snapshots. Uses more disk space; leave off for normal use.");
+        });
+        ui.add_space(8.);
         egui::Grid::new("collection_options")
             .spacing([28., 16.])
             .show(ui, |ui| {
@@ -146,9 +177,9 @@ impl Desktop {
                     (
                         "History retention",
                         &mut self.settings_config.retention_days,
-                        7.,
+                        1.,
                         3650.,
-                        "days · minimum one week",
+                        "days · 1–3650; default 7",
                     ),
                     (
                         "Maximum source distance",
@@ -164,8 +195,12 @@ impl Desktop {
                     ui.end_row();
                 }
             });
+        if self.settings_config.retention_days < self.config.retention_days {
+            ui.colored_label(AMBER, format!("Reducing retention to {:.0} days will permanently delete older history after you confirm Save and apply.", self.settings_config.retention_days));
+        }
+        ui.small("Records are compressed automatically after 24 hours and removed when they exceed retention. Cleanup runs after startup/settings changes and hourly thereafter.");
         ui.add_space(16.);
-        ui.strong("Recorded automatically");
+        ui.strong("Included when logging is enabled");
         for line in [
             "Each attempted response, including errors and authentication failures",
             "Offset, round trip, stratum, reference, reach and source security",
@@ -175,13 +210,13 @@ impl Desktop {
             ui.label(format!("• {line}"));
         }
         ui.add_space(8.);
-        ui.weak("Source comparison exports CSV and JSON summaries. Full evidence export includes samples, decisions and service events.");
+        ui.weak("Source comparison exports CSV and JSON summaries. Full history exports use compressed JSON (.json.gz).");
     }
     fn clock_settings(&mut self, ui: &mut egui::Ui) {
         section(
             ui,
             "Clock control",
-            "The Rust service starts in measurement mode. Taking over is a separate, explicit action.",
+            "The service starts in measurement mode. Taking over is a separate, explicit action.",
         );
         badge(
             ui,
@@ -278,13 +313,13 @@ impl Desktop {
         ui.strong(&self.native_service_state);
         ui.add_space(8.);
         ui.horizontal_wrapped(|ui| {
-            if ui.button("Start Rust service…").clicked() {
+            if ui.button("Start service…").clicked() {
                 self.administer(vec!["--start-service".into()]);
             }
             if ui
                 .add_enabled(
                     self.settings_config.clock.mode == "observe",
-                    egui::Button::new("Stop Rust service…"),
+                    egui::Button::new("Stop service…"),
                 )
                 .on_disabled_hover_text(
                     "Restore previous clocks before stopping an active controller.",
@@ -294,30 +329,14 @@ impl Desktop {
                 self.administer(vec!["--stop-service".into()]);
             }
         });
-        ui.add_space(12.);
-        section(
-            ui,
-            "Import previous settings",
-            "Copy the existing NetTime Next server list and collection settings into the Rust observer.",
-        );
-        ui.label("Import replaces the Rust service configuration and restarts its collector in measurement mode. Previous history is kept separately.");
-        if ui
-            .add_enabled(
-                !self.dirty_settings && self.settings_config.clock.mode == "observe",
-                egui::Button::new("Import previous service settings…"),
-            )
-            .clicked()
-        {
-            self.administer(vec!["--import-settings".into()]);
-        }
         ui.add_space(16.);
         ui.strong("Storage locations");
         ui.label(format!(
-            "Native settings: {}",
+            "Settings: {}",
             crate::service::root().join("settings.json").display()
         ));
         ui.label(format!(
-            "Native history: {}",
+            "History: {}",
             crate::service::root()
                 .join("data/history.sqlite3")
                 .display()
@@ -350,10 +369,20 @@ impl Desktop {
         }
         ui.add_space(12.);
         ui.strong("System tray");
-        ui.label("Closing with X or minimising hides the window in the notification area. Click the clock icon to reopen it. Right-click it for Open, Settings and Exit desktop app.");
+        ui.label("Minimise keeps the window on the taskbar. Closing with X hides it in the notification area. Click the clock icon to reopen it. Right-click it for Open, Settings and Exit desktop app.");
         ui.weak("Closing the desktop leaves the Windows collector running.");
     }
     fn apply_settings(&mut self) {
+        if let Ok(current) = Config::load(&self.config_path) {
+            self.config.retention_days = current.retention_days;
+        }
+        if self.settings_config.retention_days < self.config.retention_days {
+            self.confirm_retention = true;
+            return;
+        }
+        self.save_confirmed_settings();
+    }
+    fn save_confirmed_settings(&mut self) {
         let request = (|| -> Result<PathBuf> {
             let mut cfg = self.settings_config.clone();
             cfg.validate()?;

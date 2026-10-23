@@ -29,7 +29,7 @@ $database=Join-Path $Root 'data/history.sqlite3'
 try {
     $beforeHash=(Get-FileHash -LiteralPath $config -Algorithm SHA256).Hash
     $invalid=Get-Content -LiteralPath $config -Raw | ConvertFrom-Json
-    $invalid.retention_days=1
+    $invalid.retention_days=0
     [IO.File]::WriteAllText($request,($invalid|ConvertTo-Json -Depth 20),[Text.UTF8Encoding]::new($false))
     & $Helper --apply-config $request
     if ($LASTEXITCODE -eq 0) { throw 'Invalid settings were accepted' }
@@ -51,6 +51,7 @@ proof={'utc':now,'collector_instance':instance,'selected':'CI transaction fixtur
 with sqlite3.connect(sys.argv[1],timeout=10) as db:
     cycle=db.execute('SELECT COALESCE(MAX(cycle),0)+1 FROM decisions').fetchone()[0]
     db.execute('INSERT INTO decisions(cycle,utc,selected,confidence,payload)VALUES(?,?,?,?,?)',(cycle,now,proof['selected'],'CI only',json.dumps(proof)))
+    db.execute('INSERT OR REPLACE INTO live_state(id,cycle,payload)VALUES(1,?,?)',(cycle,json.dumps(proof)))
 '@ | python - $database
     if ($LASTEXITCODE -ne 0) { throw 'Cannot write isolated CI transaction fixture' }
     Invoke-Native @('--takeover') | Out-Null

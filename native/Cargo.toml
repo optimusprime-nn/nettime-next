@@ -1,6 +1,6 @@
 [package]
 name = "nettime-next-native"
-version = "0.4.3-preview"
+version = "0.4.4-preview"
 edition = "2024"
 publish = false
 
@@ -8,7 +8,8 @@ publish = false
 anyhow = "1.0"
 serde = { version = "1.0", features = ["derive"] }
 serde_json = "1.0"
-rusqlite = { version = "0.38", features = ["bundled"] }
+rusqlite = { version = "0.38", features = ["bundled", "functions", "hooks"] }
+flate2 = "1.1"
 getrandom = "0.3"
 hex = "0.4"
 rustls = { version = "0.23", default-features = false, features = ["ring", "std", "tls12"] }

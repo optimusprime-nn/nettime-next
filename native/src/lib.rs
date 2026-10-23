@@ -64,14 +64,7 @@ pub fn run() -> Result<()> {
             Ok(None)
         }
     };
-    let config = value("--config")?.unwrap_or_else(|| {
-        let native = service::root().join("settings.json");
-        if native.exists() {
-            native
-        } else {
-            config::machine_root().join("settings.json")
-        }
-    });
+    let config = value("--config")?.unwrap_or_else(|| service::root().join("settings.json"));
     let collector = args.iter().any(|a| a == "--once" || a == "--headless");
     let data = value("--data-dir")?;
     if collector {
@@ -89,6 +82,35 @@ pub fn run() -> Result<()> {
         })
         .join("history.sqlite3")
     });
+    if args.iter().any(|a| a == "--maintain-history") {
+        ensure!(
+            args.iter().any(|a| a == "--database"),
+            "History maintenance requires an explicit --database FILE"
+        );
+        for live in [
+            service::root().join("data/history.sqlite3"),
+            config::machine_root().join("data/history.sqlite3"),
+        ] {
+            if database.exists()
+                && live.exists()
+                && std::fs::canonicalize(&database)? == std::fs::canonicalize(live)?
+            {
+                windows::require_admin()?;
+            }
+        }
+        let days = if let Some(i) = args.iter().position(|a| a == "--days") {
+            args.get(i + 1)
+                .ok_or_else(|| anyhow::anyhow!("Missing --days value"))?
+                .parse::<f64>()?
+        } else {
+            config::Config::load(&config)?.retention_days
+        };
+        println!(
+            "{}",
+            storage::Store::open(&database, false)?.maintain(days)?
+        );
+        return Ok(());
+    }
     if let Some(folder) = value("--export")? {
         return storage::Store::open(&database, true)?.export(&folder);
     }
@@ -134,6 +156,7 @@ pub fn run() -> Result<()> {
             ("--smoke-settings", "settings"),
             ("--smoke-comparison", "comparison"),
             ("--smoke-collection", "collection"),
+            ("--smoke-retention", "retention"),
             ("--smoke-clock", "clock"),
             ("--smoke-service", "service"),
             ("--smoke-appearance", "appearance"),

@@ -121,7 +121,10 @@ pub(super) fn test_lifecycle(control: Control, destination: PathBuf) {
             unsafe {
                 ShowWindowAsync(control.window.handle(), SW_MINIMIZE);
             }
-            wait(&hidden)?;
+            wait(&|| unsafe {
+                IsWindowVisible(control.window.handle()) != 0
+                    && IsIconic(control.window.handle()) != 0
+            })?;
             control.request(Action::Open);
             wait(&visible)?;
             wait(&|| {
@@ -137,7 +140,7 @@ pub(super) fn test_lifecycle(control: Control, destination: PathBuf) {
         })();
         let report = match &result {
             Ok(()) => {
-                serde_json::json!({"passed":true,"checks":["X hides","Open restores after X","Settings restores after X","Minimize hides","Open restores after minimize","Exit requested while hidden"]})
+                serde_json::json!({"passed":true,"checks":["X hides","Open restores after X","Settings restores after X","Minimize keeps taskbar window","Open restores after minimize","Exit requested while hidden"]})
             }
             Err(e) => serde_json::json!({"passed":false,"error":format!("{e:#}")}),
         };

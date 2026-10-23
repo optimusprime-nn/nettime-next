@@ -1,4 +1,4 @@
-# NetTime Next — native Rust preview 0.4.3
+# NetTime Next — native Rust preview 0.4.4
 
 Native Rust desktop and Windows service, with no Python runtime or Python
 subprocess. The MSVC runtime is linked statically and packaging checks the
@@ -15,9 +15,8 @@ Dark/light appearance and interface size are saved for the current Windows user;
 `--compact` opens a smaller window, with summary cards adapting to its width.
 Servers can be moved up and down in Settings; Save and apply preserves that order,
 and Overview follows it by default through its Configured order option.
-Settings drafts are separate from the history source being viewed and survive
-page changes. Save and apply is the explicit service configuration action.
-X and minimise hide the desktop in the system tray. Left-click its clock icon
+Settings drafts survive page changes. Save and apply is the explicit service configuration action.
+Minimise keeps the desktop on the taskbar. X hides it in the system tray. Left-click its clock icon
 to reopen it; right-click for Open, Settings and Exit desktop app. Exit closes
 only the desktop. If the tray cannot be created, X closes the desktop normally
 and minimising leaves it accessible on the taskbar.
@@ -28,8 +27,8 @@ minimised; the Windows service remains a separate automatic boot service.
 
 ## Clock ownership
 
-The native service measures every configured NTP/NTS source, keeps at least
-seven days of SQLite evidence, and starts in observation mode. Installing it
+The service measures every configured NTP/NTS source, defaults to seven days of
+SQLite evidence, and starts in observation mode. Installing it
 does not take the clock away from the original NetTime or Windows Time services.
 
 Settings includes **Take over clock** and **Restore previous clocks**. Both
@@ -70,27 +69,24 @@ controlling, changed sources must pass an independent response/authentication
 check before the collector stops. Failed checks leave the live collector running;
 failed restarts restore the exact previous settings and restart the collector.
 Interrupted updates are recovered by the next administrator action. Fresh filters
-are required after restart. Importing another service’s settings still requires
-restoring clock ownership first. The current Python service's
-settings can be imported without modifying that service.
+are required after restart.
 
-The desktop can switch between native and current service evidence. Source
-comparison supports one hour, 24 hours, seven days and all retained history, including
+The desktop shows only this service history. Source comparison supports one hour, 24 hours, seven days and all retained history, including
 valid-attempt percentage, coverage, median and P95 offset/delay, offset variation,
 stratum range/changes, authentication coverage, selected duration, failures,
 selection/rejection reasons and a selection-change timeline. Offset plots show
 recorded measurements without bridging gaps. CSV/JSON comparison exports and
-full SQLite evidence exports run in the background and report their folder.
+compressed full-history JSON exports run in the background and report their folder.
 Reports use one read snapshot, exclude future records, and expire selection
 duration after three poll intervals rather than crediting service downtime.
 
 ## Install and commands
 
-Run `NetTimeNext-Rust-0.4.3-Preview-Setup-x64.exe`. The default service task
+Run `NetTimeNext-Rust-0.4.4-Preview-Setup-x64.exe`. The default service task
 registers and starts `NetTimeNextNativePreview` automatically as LocalService,
 using `ProgramData\NetTimeNextNativePreview`. The existing service name is kept
 for preview upgrade compatibility. Native evidence stays in its own database;
-the Python history remains available from **Previous service**.
+the desktop no longer offers a previous-service history chooser.
 
 `NetTimeNextNativeService.exe --help` lists commands. Administrative commands:
 
@@ -124,3 +120,29 @@ to that runner; no valid NTP sample fixtures can drive its controller.
 NTP/NTS transport, filtering and mitigation parity tests remain in place. NTS
 control-response handling still needs the remaining conformance work tracked in
 GitHub issue 1. This port does not claim completion of that wider protocol work.
+
+## History storage policy
+
+Settings > Collection & history includes a logging switch, optional detailed
+diagnostics and retention from 1 to 3650 days (default 7). Turning logging off
+stops new sample, decision and event history; live status and minimal
+peer/ownership safety state continue independently. Existing history still expires.
+Normal decisions reference measured sources without duplicating every server
+snapshot, survivors reference candidate names, and repeated hold events are
+suppressed. Diagnostic mode includes packet headers and full decision snapshots.
+
+A background worker runs on startup/settings restart and hourly. It purges
+records strictly older than the configured retention cutoff, compresses retained
+JSON payloads older than 24 hours with gzip, and reclaims freed database pages
+when worthwhile. Compression is stored inside SQLite; numerical indexes stay
+queryable. Graphs, comparisons and exports transparently decode older payloads.
+Short transactions share the database with collection; compaction has a five
+second execution limit and interrupted compaction rolls back for a later pass.
+The desktop warns and asks for confirmation before a retention reduction.
+Compressed records follow the same purge cutoff as recent records.
+
+Full history exports are samples.json.gz, decisions.json.gz and events.json.gz.
+Existing exported files are not automatically modified or deleted. CLI maintenance:
+`--maintain-history --database FILE --days DAYS` (administrator rights required
+for a live installed database). Manual retention changes permanently remove older
+records; export first when needed. The original ownership journal is never pruned.

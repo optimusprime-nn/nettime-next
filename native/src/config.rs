@@ -62,6 +62,8 @@ pub struct Config {
     pub poll_seconds: f64,
     pub timeout_seconds: f64,
     pub retention_days: f64,
+    pub logging_enabled: bool,
+    pub diagnostic_logging: bool,
     pub max_distance_ms: f64,
     pub clock: Clock,
 }
@@ -72,6 +74,8 @@ impl Default for Config {
             poll_seconds: 64.,
             timeout_seconds: 3.,
             retention_days: 7.,
+            logging_enabled: true,
+            diagnostic_logging: false,
             max_distance_ms: 1000.,
             clock: Clock::default(),
         }
@@ -110,7 +114,7 @@ impl Config {
         for (name, value, low, high) in [
             ("poll", self.poll_seconds, 64., 131072.),
             ("timeout", self.timeout_seconds, 0.1, 30.),
-            ("retention", self.retention_days, 7., 3650.),
+            ("retention", self.retention_days, 1., 3650.),
             ("distance", self.max_distance_ms, 1., 10000.),
             ("offset", self.clock.max_offset_ms, 1., 128.),
             ("slew", self.clock.max_slew_ppm, 1., 500.),

@@ -1,12 +1,12 @@
 [Setup]
 AppId={{07B1698E-8815-43DA-B2DA-F90FE6310943}
-AppName=NetTime Next Rust Preview
-AppVersion=0.4.3
+AppName=NetTime Next
+AppVersion=0.4.4
 AppPublisher=NetTime Next Project
 DefaultDirName={autopf}\NetTime Next Rust Preview
-DefaultGroupName=NetTime Next Rust Preview
+DefaultGroupName=NetTime Next
 OutputDir=..\dist
-OutputBaseFilename=NetTimeNext-Rust-0.4.3-Preview-Setup-x64
+OutputBaseFilename=NetTimeNext-Rust-0.4.4-Preview-Setup-x64
 ArchitecturesAllowed=x64compatible
 ArchitecturesInstallIn64BitMode=x64compatible
 PrivilegesRequired=admin
@@ -32,11 +32,11 @@ Source: "README.md"; DestDir: "{app}"; Flags: ignoreversion
 Source: "target\third-party-licenses\*"; DestDir: "{app}\ThirdPartyLicenses"; Flags: ignoreversion recursesubdirs createallsubdirs
 
 [Icons]
-Name: "{group}\NetTime Next Rust Preview"; Filename: "{app}\NetTimeNextNative.exe"
-Name: "{group}\Uninstall Rust Preview"; Filename: "{uninstallexe}"
+Name: "{group}\NetTime Next"; Filename: "{app}\NetTimeNextNative.exe"
+Name: "{group}\Uninstall NetTime Next"; Filename: "{uninstallexe}"
 
 [Run]
-Filename: "{app}\NetTimeNextNative.exe"; Description: "Open the Rust desktop preview"; Flags: nowait postinstall skipifsilent runasoriginaluser
+Filename: "{app}\NetTimeNextNative.exe"; Description: "Open NetTime Next"; Flags: nowait postinstall skipifsilent runasoriginaluser
 
 [Code]
 var UpgradingExisting: Boolean;

@@ -101,7 +101,7 @@ pub(super) fn apply(ctx: &egui::Context, dark: bool) {
     }));
 }
 pub(super) fn card(ui: &mut egui::Ui, content: impl FnOnce(&mut egui::Ui)) {
-    let width = (ui.available_width() - 32.).max(0.);
+    let width = (ui.available_width() - 20.).max(0.);
     egui::Frame::new()
         .fill(ui.visuals().window_fill)
         .stroke(egui::Stroke::new(
@@ -109,7 +109,7 @@ pub(super) fn card(ui: &mut egui::Ui, content: impl FnOnce(&mut egui::Ui)) {
             ui.visuals().widgets.noninteractive.bg_stroke.color,
         ))
         .corner_radius(10)
-        .inner_margin(16)
+        .inner_margin(10)
         .show(ui, |ui| {
             ui.set_min_width(width);
             content(ui);
@@ -143,23 +143,25 @@ pub(super) fn badge(ui: &mut egui::Ui, text: &str, color: Color32) {
 }
 pub(super) fn metric(ui: &mut egui::Ui, label: &str, value: &str, detail: &str) {
     card(ui, |ui| {
-        ui.set_min_height(80.);
+        ui.set_min_height(42.);
         ui.set_min_width((ui.available_width() - 2.).max(0.));
         ui.label(
             RichText::new(label)
                 .small()
                 .color(ui.visuals().weak_text_color()),
         );
-        ui.label(RichText::new(value).size(25.).strong());
-        ui.label(
-            RichText::new(detail)
-                .small()
-                .color(ui.visuals().weak_text_color()),
-        );
+        ui.label(RichText::new(value).size(19.).strong())
+            .on_hover_text(detail);
     });
 }
 pub(super) fn summary(ui: &mut egui::Ui, values: [(&str, String, String); 4]) {
-    let columns = if ui.available_width() < 900. { 2 } else { 4 };
+    let columns = if ui.available_width() < 440. {
+        1
+    } else if ui.available_width() < 680. {
+        2
+    } else {
+        4
+    };
     for (index, row) in values.chunks(columns).enumerate() {
         if index > 0 {
             ui.add_space(4.);

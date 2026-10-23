@@ -21,7 +21,7 @@ impl Desktop {
                 let old = self.report_days;
                 ui.add_enabled_ui(self.report_worker.is_none(), |ui| {
                     let mut periods = vec![(1. / 24., "1 hour"), (1., "24 hours"), (7., "7 days")];
-                    if self.config.retention_days > 7. {
+                    if self.config.retention_days != 7. {
                         periods.push((self.config.retention_days, "All retained"));
                     }
                     for (days, name) in periods {
@@ -76,7 +76,7 @@ impl Desktop {
                     }
                 });
             });
-            ui.weak("Compare recorded source quality and selection decisions. Each service retains its own history.");
+            ui.weak("Compare recorded source quality and selection decisions. Records older than 24 hours are compressed automatically.");
         });
         ui.add_space(12.);
         let Some(report) = &self.report else {

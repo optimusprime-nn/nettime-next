@@ -105,7 +105,7 @@ pub fn install() -> Result<()> {
     )?;
     let info = ServiceInfo {
         name: NAME.into(),
-        display_name: "NetTime Next Native".into(),
+        display_name: "NetTime Next".into(),
         service_type: ServiceType::OWN_PROCESS,
         start_type: ServiceStartType::AutoStart,
         error_control: ServiceErrorControl::Normal,
