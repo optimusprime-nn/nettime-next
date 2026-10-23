@@ -256,7 +256,7 @@ impl Desktop {
                     .then_with(|| a.0.cmp(&b.0))
             });
             let mut clicked = None;
-            egui::ScrollArea::horizontal().id_salt("source_table_scroll").show(ui, |ui| {
+            egui::ScrollArea::horizontal().id_salt("source_table_scroll").max_width(ui.available_width()).auto_shrink([false, true]).show(ui, |ui| {
                 egui::Grid::new("server_table").striped(true).spacing([14., 6.]).min_row_height(26.).show(ui, |ui| {
                     for title in ["Server", "Response", "Stratum", "Offset · ms", "Round trip · ms", "Reach", "Security", "Next check"] { ui.strong(title); } ui.end_row();
                     for (key, s) in &peers {

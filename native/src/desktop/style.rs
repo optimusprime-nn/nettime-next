@@ -101,19 +101,19 @@ pub(super) fn apply(ctx: &egui::Context, dark: bool) {
     }));
 }
 pub(super) fn card(ui: &mut egui::Ui, content: impl FnOnce(&mut egui::Ui)) {
-    let width = (ui.available_width() - 20.).max(0.);
-    egui::Frame::new()
+    let frame = egui::Frame::new()
         .fill(ui.visuals().window_fill)
         .stroke(egui::Stroke::new(
             1_f32,
             ui.visuals().widgets.noninteractive.bg_stroke.color,
         ))
         .corner_radius(10)
-        .inner_margin(10)
-        .show(ui, |ui| {
-            ui.set_min_width(width);
-            content(ui);
-        });
+        .inner_margin(10);
+    let width = (ui.available_width() - frame.total_margin().sum().x).max(0.);
+    frame.show(ui, |ui| {
+        ui.set_width(width);
+        content(ui);
+    });
 }
 pub(super) fn install_fonts(ctx: &egui::Context) {
     if let Some(bytes) = std::env::var_os("WINDIR")
