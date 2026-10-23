@@ -166,6 +166,28 @@ fn source_count<'de, D: serde::Deserializer<'de>>(d: D) -> std::result::Result<u
 mod tests {
     use super::*;
     #[test]
+    fn release_defaults_have_public_authenticated_groups_and_do_not_take_over() {
+        let mut cfg: Config =
+            serde_json::from_str(include_str!("../settings.default.json")).unwrap();
+        cfg.validate().unwrap();
+        assert_eq!(cfg.clock.mode, "observe");
+        assert_eq!(cfg.retention_days, 7.);
+        assert!(cfg.logging_enabled && !cfg.diagnostic_logging);
+        assert!(
+            cfg.servers.iter().all(
+                |s| s.security == "nts_required" && s.host.parse::<std::net::IpAddr>().is_err()
+            )
+        );
+        assert!(
+            cfg.servers
+                .iter()
+                .map(|s| &s.source_group)
+                .collect::<HashSet<_>>()
+                .len()
+                >= cfg.clock.min_sources
+        );
+    }
+    #[test]
     fn imports_legacy_integral_float_counts_and_ports_without_rounding() {
         let mut cfg:Config=serde_json::from_str(r#"{"servers":[{"host":"ntp.invalid","port":123.0,"nts_ke_port":4460.0}],"clock":{"min_sources":3.0}}"#).unwrap();
         cfg.validate().unwrap();

@@ -2,11 +2,17 @@ param([Parameter(Mandatory=$true)][string]$Installer)
 $ErrorActionPreference='Stop'
 if ($env:GITHUB_ACTIONS -ne 'true') { throw 'Installed lifecycle test is restricted to disposable GitHub runners.' }
 if ($env:RUNNER_ENVIRONMENT -ne 'github-hosted') { throw 'Requires a disposable GitHub-hosted runner.' }
-$setup=Start-Process -FilePath (Resolve-Path $Installer) -ArgumentList '/VERYSILENT /SUPPRESSMSGBOXES /NORESTART /TASKS=observer' -WindowStyle Hidden -Wait -PassThru
-if ($setup.ExitCode -ne 0) { throw 'Rust preview installation failed' }
+$setup=Start-Process -FilePath (Resolve-Path $Installer) -ArgumentList '/VERYSILENT /SUPPRESSMSGBOXES /NORESTART /TASKS=observer,tray' -WindowStyle Hidden -Wait -PassThru
+if ($setup.ExitCode -ne 0) { throw 'Installation failed' }
 $root=Join-Path $env:ProgramData 'NetTimeNextNativePreview'
-$app=Join-Path $env:ProgramFiles 'NetTime Next Rust Preview'
+$app=Join-Path $env:ProgramFiles 'NetTime Next'
 $helper=Join-Path $app 'NetTimeNextNativeService.exe'
+$defaults=Get-Content -LiteralPath (Join-Path $root 'settings.json') -Raw | ConvertFrom-Json
+if ($defaults.clock.mode -ne 'observe' -or $defaults.servers.Count -lt 3 -or @($defaults.servers | Where-Object { $_.security -ne 'nts_required' -or $_.host -like '192.168.*' }).Count) { throw 'Fresh release defaults are unsafe or retain private sources.' }
+$startup=Join-Path ([Environment]::GetFolderPath('CommonStartup')) 'NetTime Next.lnk'
+if (-not(Test-Path -LiteralPath $startup)) { throw 'Tray startup shortcut is missing.' }
+$shortcut=(New-Object -ComObject WScript.Shell).CreateShortcut($startup)
+if ($shortcut.TargetPath -ne (Join-Path $app 'NetTimeNextNative.exe') -or $shortcut.Arguments -ne '--tray') { throw 'Tray startup is not configured for the native desktop.' }
 & $helper --stop-service
 if ($LASTEXITCODE -ne 0) { throw 'Could not stop native observer before fixture configuration' }
 $fixture=@{servers=@(@{host='one.invalid';security='nts_required';source_group='fixture-one'},@{host='two.invalid';security='nts_required';source_group='fixture-two'},@{host='three.invalid';security='nts_required';source_group='fixture-three'});poll_seconds=64;timeout_seconds=1;retention_days=7;max_distance_ms=1000;clock=@{mode='observe'}}
@@ -35,6 +41,11 @@ $trayDesktop=Start-Process -FilePath (Join-Path $app 'NetTimeNextNative.exe') -A
 if (-not $trayDesktop.WaitForExit(45000)) { Stop-Process -Id $trayDesktop.Id; throw 'Installed tray lifecycle did not exit.' }
 if ($trayDesktop.ExitCode -ne 0 -or -not (Test-Path -LiteralPath $trayReport)) { throw 'Installed tray lifecycle did not complete.' }
 if (-not (Get-Content -LiteralPath $trayReport -Raw | ConvertFrom-Json).passed) { throw 'Installed tray lifecycle failed.' }
+$trayDesktop=Start-Process -FilePath (Join-Path $app 'NetTimeNextNative.exe') -ArgumentList ($trayArguments+' --tray') -PassThru
+if (-not $trayDesktop.WaitForExit(45000)) { Stop-Process -Id $trayDesktop.Id; throw 'Tray startup did not restore and exit.' }
+if ($trayDesktop.ExitCode -ne 0) { throw 'Tray startup failed.' }
+$trayState=Get-Content -LiteralPath $trayReport -Raw | ConvertFrom-Json
+if (-not $trayState.passed -or $trayState.checks -notcontains 'Tray startup hidden and restores') { throw 'Tray startup proof missing.' }
 & $helper --export (Join-Path $env:RUNNER_TEMP 'native-export') --database $database
 if ($LASTEXITCODE -ne 0) { throw 'Native export failed' }
 & $helper --compare-export (Join-Path $env:RUNNER_TEMP 'native-comparison') --database $database --days 7

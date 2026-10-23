@@ -34,7 +34,7 @@ pub fn run() -> Result<()> {
     }
     if args.iter().any(|a| a == "--help") {
         println!(
-            "NetTime Next Native\n\nDesktop: native service history when installed, otherwise current NetTime Next history\n--config FILE --database FILE\n--once / --headless: observation only; requires --config and separate --data-dir\n--export FOLDER: export full evidence\n--compare-export FOLDER --days DAYS: export windowed CSV/JSON report\n--service: Windows service dispatcher\n--install-service / --start-service / --stop-service / --remove-service / --status-service\n--apply-config FILE / --import-settings / --takeover / --rollback: explicit administrator actions\n--health: current native service and ownership evidence\n\nOnly the authorized Windows service can control the clock. Install and settings apply default to observation."
+            "NetTime Next Native\n\nDesktop: installed service history; --tray starts in the notification area\n--config FILE --database FILE\n--once / --headless: observation only; requires --config and separate --data-dir\n--export FOLDER: export full evidence\n--compare-export FOLDER --days DAYS: export windowed CSV/JSON report\n--maintain-history --database FILE --days DAYS: compress and purge expired history\n--service: Windows service dispatcher\n--install-service / --start-service / --stop-service / --remove-service / --status-service\n--apply-config FILE / --import-settings / --takeover / --rollback: explicit administrator actions\n--health: current native service and ownership evidence\n\nOnly the authorized Windows service can control the clock. Install and settings apply default to observation."
         );
         return Ok(());
     }

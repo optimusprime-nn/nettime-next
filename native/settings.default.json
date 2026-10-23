@@ -1,0 +1,39 @@
+{
+  "servers": [
+    {
+      "host": "time.cloudflare.com",
+      "port": 123,
+      "security": "nts_required",
+      "source_group": "cloudflare",
+      "nts_ke_port": 4460
+    },
+    {
+      "host": "nts.netnod.se",
+      "port": 123,
+      "security": "nts_required",
+      "source_group": "netnod",
+      "nts_ke_port": 4460
+    },
+    {
+      "host": "time.dfm.dk",
+      "port": 123,
+      "security": "nts_required",
+      "source_group": "dfm",
+      "nts_ke_port": 4460
+    }
+  ],
+  "poll_seconds": 64,
+  "timeout_seconds": 3,
+  "retention_days": 7,
+  "logging_enabled": true,
+  "diagnostic_logging": false,
+  "max_distance_ms": 1000,
+  "clock": {
+    "mode": "observe",
+    "require_nts": false,
+    "min_sources": 3,
+    "max_offset_ms": 128,
+    "max_slew_ppm": 250,
+    "holdover_seconds": 900
+  }
+}

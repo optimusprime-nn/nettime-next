@@ -1,12 +1,12 @@
 [Setup]
 AppId={{07B1698E-8815-43DA-B2DA-F90FE6310943}
 AppName=NetTime Next
-AppVersion=0.4.4
+AppVersion=1.0.0
 AppPublisher=NetTime Next Project
-DefaultDirName={autopf}\NetTime Next Rust Preview
+DefaultDirName={autopf}\NetTime Next
 DefaultGroupName=NetTime Next
 OutputDir=..\dist
-OutputBaseFilename=NetTimeNext-Rust-0.4.4-Preview-Setup-x64
+OutputBaseFilename=NetTimeNext-1.0.0-Setup-x64
 ArchitecturesAllowed=x64compatible
 ArchitecturesInstallIn64BitMode=x64compatible
 PrivilegesRequired=admin
@@ -18,7 +18,9 @@ UninstallDisplayIcon={app}\NetTimeNextNative.exe
 SetupLogging=yes
 
 [Tasks]
-Name: "observer"; Description: "Run the native Windows service automatically (measurement mode)"
+Name: "observer"; Description: "Start the Windows service automatically (measurement mode)"
+
+Name: "tray"; Description: "Start in the system tray when signing in"
 
 [Dirs]
 Name: "{commonappdata}\NetTimeNextNativePreview"; Permissions: users-readexec
@@ -27,13 +29,19 @@ Name: "{commonappdata}\NetTimeNextNativePreview\data"; Permissions: users-readex
 [Files]
 Source: "target\release\NetTimeNextNative.exe"; DestDir: "{app}"; Flags: ignoreversion
 Source: "target\release\NetTimeNextNativeService.exe"; DestDir: "{app}"; Flags: ignoreversion
-Source: "..\settings.example.json"; DestDir: "{commonappdata}\NetTimeNextNativePreview"; DestName: "settings.json"; Flags: onlyifdoesntexist uninsneveruninstall
+Source: "settings.default.json"; DestDir: "{commonappdata}\NetTimeNextNativePreview"; DestName: "settings.json"; Flags: onlyifdoesntexist uninsneveruninstall
 Source: "README.md"; DestDir: "{app}"; Flags: ignoreversion
 Source: "target\third-party-licenses\*"; DestDir: "{app}\ThirdPartyLicenses"; Flags: ignoreversion recursesubdirs createallsubdirs
+
+
+[InstallDelete]
+Type: files; Name: "{userstartup}\NetTime Next Rust.lnk"; Tasks: tray
 
 [Icons]
 Name: "{group}\NetTime Next"; Filename: "{app}\NetTimeNextNative.exe"
 Name: "{group}\Uninstall NetTime Next"; Filename: "{uninstallexe}"
+
+Name: "{commonstartup}\NetTime Next"; Filename: "{app}\NetTimeNextNative.exe"; Parameters: "--tray"; WorkingDir: "{app}"; IconFilename: "{app}\NetTimeNextNative.exe"; Tasks: tray
 
 [Run]
 Filename: "{app}\NetTimeNextNative.exe"; Description: "Open NetTime Next"; Flags: nowait postinstall skipifsilent runasoriginaluser

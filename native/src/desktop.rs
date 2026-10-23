@@ -106,6 +106,7 @@ pub fn run(
             ..Default::default()
         },
         viewport: egui::ViewportBuilder::default()
+            .with_visible(!std::env::args().any(|a| a == "--tray"))
             .with_inner_size(if std::env::args().any(|a| a == "--compact") {
                 [900., 640.]
             } else {
@@ -166,6 +167,9 @@ pub fn run(
                     .build()
                     .ok()
             });
+            if tray.is_none() {
+                cc.egui_ctx.send_viewport_cmd(ViewportCommand::Visible(true));
+            }
             if let Some(destination) = tray_test {
                 if tray.is_none() {
                     return Err(anyhow::anyhow!("A working Windows notification area is required for the tray lifecycle test").into());

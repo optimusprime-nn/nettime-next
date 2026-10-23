@@ -104,6 +104,10 @@ pub(super) fn test_lifecycle(control: Control, destination: PathBuf) {
                     && IsIconic(control.window.handle()) == 0
             };
             let hidden = || unsafe { IsWindowVisible(control.window.handle()) == 0 };
+            if std::env::args().any(|a| a == "--tray") {
+                wait(&hidden)?;
+                control.request(Action::Open);
+            }
             wait(&visible)?;
             for action in [Action::Open, Action::Settings] {
                 control.window.close(); // Same WM_CLOSE as the title-bar X.
@@ -140,7 +144,18 @@ pub(super) fn test_lifecycle(control: Control, destination: PathBuf) {
         })();
         let report = match &result {
             Ok(()) => {
-                serde_json::json!({"passed":true,"checks":["X hides","Open restores after X","Settings restores after X","Minimize keeps taskbar window","Open restores after minimize","Exit requested while hidden"]})
+                let mut checks = vec![
+                    "X hides",
+                    "Open restores after X",
+                    "Settings restores after X",
+                    "Minimize keeps taskbar window",
+                    "Open restores after minimize",
+                    "Exit requested while hidden",
+                ];
+                if std::env::args().any(|a| a == "--tray") {
+                    checks.push("Tray startup hidden and restores");
+                }
+                serde_json::json!({"passed":true,"checks":checks})
             }
             Err(e) => serde_json::json!({"passed":false,"error":format!("{e:#}")}),
         };

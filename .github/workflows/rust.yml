@@ -1,4 +1,4 @@
-name: Rust migration checks
+name: Windows release checks
 on:
   push:
     paths: ['native/**', '.github/workflows/rust.yml', 'desktop.manifest', 'nettime.ico']
@@ -20,7 +20,7 @@ jobs:
       - uses: actions/setup-python@v5
         with:
           python-version: '3.11'
-      - name: Package native Windows preview
+      - name: Package Windows release
         run: |
           $compiler = & ./scripts/Get-InnoSetup.ps1 -Destination "$env:RUNNER_TEMP/nettime-inno"
           python ./native/package.py --iscc $compiler
@@ -28,18 +28,18 @@ jobs:
         working-directory: native
         run: cargo clippy --locked --all-targets -- -D warnings
       - name: Native installed service lifecycle
-        run: ./native/test-installed.ps1 -Installer ./dist/NetTimeNext-Rust-0.4.4-Preview-Setup-x64.exe
+        run: ./native/test-installed.ps1 -Installer ./dist/NetTimeNext-1.0.0-Setup-x64.exe
       - name: Native desktop launch check
         run: |
           $desktop = Start-Process ./native/target/release/NetTimeNextNative.exe -ArgumentList '--smoke-ui --software-rendering' -Wait -PassThru
           if ($desktop.ExitCode -ne 0) { exit $desktop.ExitCode }
       - uses: actions/upload-artifact@v4
         with:
-          name: Rust-native-preview-x64
+          name: NetTimeNext-Windows-x64
           path: |
             native/target/release/NetTimeNextNative*.exe
-            dist/NetTimeNext-Rust-0.4.4-Preview-Setup-x64.exe
+            dist/NetTimeNext-1.0.0-Setup-x64.exe
             dist/rust-clock-response.json
             dist/rust-tray-lifecycle.json
-            dist/rust-build-manifest.json
-            dist/RUST-SHA256SUMS.txt
+            dist/build-manifest.json
+            dist/SHA256SUMS.txt

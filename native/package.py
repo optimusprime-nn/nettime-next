@@ -48,15 +48,15 @@ def main():
         packages.append(dict(name=package['name'],version=package['version'],license=package['license'],repository=package['repository'],license_files=licenses))
     (notices/'DEPENDENCIES.json').write_text(json.dumps(packages,indent=2)+'\n',encoding='utf-8')
     run(args.iscc.resolve(),ROOT/'installer.iss')
-    installer=ROOT.parent/'dist'/'NetTimeNext-Rust-0.4.4-Preview-Setup-x64.exe'
-    manifest=dict(version='0.4.4-preview',stage='Compact history, configurable logging and retention, 24-hour compression and single-service desktop',installer=installer.name,
+    installer=ROOT.parent/'dist'/'NetTimeNext-1.0.0-Setup-x64.exe'
+    manifest=dict(version='1.0.0',stage='First Windows x64 release',installer=installer.name,
                   sha256=hashlib.sha256(installer.read_bytes()).hexdigest(),
                   source_commit=run('git','rev-parse','HEAD',capture=True).strip(),
                   source_dirty=bool(run('git','status','--porcelain','--untracked-files=no',capture=True)),
                   rustc=run(Path(cargo).with_name('rustc.exe') if Path(cargo).is_absolute() else 'rustc','--version',capture=True).strip(),
                   crt_linkage='static',runtime_imports_check='passed',signed=False)
-    (installer.parent/'rust-build-manifest.json').write_text(json.dumps(manifest,indent=2)+'\n',encoding='utf-8')
-    (installer.parent/'RUST-SHA256SUMS.txt').write_text(f"{manifest['sha256']}  {installer.name}\n",encoding='utf-8')
+    (installer.parent/'build-manifest.json').write_text(json.dumps(manifest,indent=2)+'\n',encoding='utf-8')
+    (installer.parent/'SHA256SUMS.txt').write_text(f"{manifest['sha256']}  {installer.name}\n",encoding='utf-8')
     print(json.dumps(manifest,indent=2))
 
 if __name__=='__main__':
