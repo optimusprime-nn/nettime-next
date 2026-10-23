@@ -6,6 +6,7 @@ import os
 from pathlib import Path
 import shutil
 import subprocess
+import tomllib
 
 ROOT = Path(__file__).resolve().parent
 
@@ -19,6 +20,12 @@ def main():
     parser.add_argument('--cargo',default='cargo')
     args=parser.parse_args()
     cargo=args.cargo
+    # Reject certificate trust dependencies predating the October 2026 distrust fixes.
+    locked=tomllib.loads((ROOT/'Cargo.lock').read_text(encoding='utf-8'))['package']
+    for name,minimum in {'webpki-roots':(1,0,10),'rustls-webpki':(0,103,16)}.items():
+        versions=[p['version'] for p in locked if p['name']==name]
+        if not versions or any('-' in v or tuple(map(int,v.split('.'))) < minimum for v in versions):
+            raise SystemExit(f'Release blocked: {name} must include the certificate distrust fixes ({minimum}).')
     run(cargo,'fmt','--check')
     run(cargo,'test','--locked')
     run(cargo,'build','--release','--locked')

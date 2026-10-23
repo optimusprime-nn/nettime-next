@@ -13,7 +13,7 @@ flate2 = "1.1"
 getrandom = "0.3"
 hex = "0.4"
 rustls = { version = "0.23", default-features = false, features = ["ring", "std", "tls12"] }
-webpki-roots = "1.0"
+webpki-roots = "1.0.10"
 aes-siv = "0.7"
 sha2 = "0.10"
 zeroize = "1.8"
