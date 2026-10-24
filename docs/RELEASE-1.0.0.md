@@ -2,6 +2,11 @@
 
 First Windows x64 release of the native desktop and background time service.
 
+Publication privacy rebuild: compiler paths are anonymised and checked during
+packaging. Repository examples and historical commit identities have also been
+sanitised. The replacement installer has a new checksum; use the attached
+`SHA256SUMS.txt`. Earlier preview downloads have been withdrawn.
+
 - Check every configured NTP/NTS endpoint and explain source selection.
 - Show stratum, reach, offset, round trip and authentication alongside history.
 - Administrator-controlled clock takeover, bounded gradual correction and durable rollback.

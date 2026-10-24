@@ -1,5 +1,6 @@
 name: Windows release checks
 on:
+  workflow_dispatch:
   push:
     paths: ['native/**', '.github/workflows/rust.yml', 'desktop.manifest', 'nettime.ico']
   pull_request:
