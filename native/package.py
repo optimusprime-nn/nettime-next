@@ -7,6 +7,7 @@ from pathlib import Path
 import shutil
 import subprocess
 import tomllib
+from check_privacy import verify as verify_privacy
 
 ROOT = Path(__file__).resolve().parent
 
@@ -20,6 +21,16 @@ def main():
     parser.add_argument('--cargo',default='cargo')
     args=parser.parse_args()
     cargo=args.cargo
+    # Release binaries must not disclose the developer's Windows account or
+    # checkout location through panic messages and embedded source paths.
+    flags=['-C','target-feature=+crt-static']
+    remaps=[(Path.home(), '/build/home')]
+    for variable in ('CARGO_HOME','RUSTUP_HOME'):
+        if os.environ.get(variable):
+            remaps.append((Path(os.environ[variable]).resolve(), '/build/'+variable.lower()))
+    remaps.append((ROOT.parent.resolve(), '/build/nettime-next'))
+    flags.extend('--remap-path-prefix='+str(source)+'='+target for source,target in remaps)
+    os.environ['CARGO_ENCODED_RUSTFLAGS']='\x1f'.join(flags)
     # Reject certificate trust dependencies predating the October 2026 distrust fixes.
     locked=tomllib.loads((ROOT/'Cargo.lock').read_text(encoding='utf-8'))['package']
     for name,minimum in {'webpki-roots':(1,0,10),'rustls-webpki':(0,103,16)}.items():
@@ -32,6 +43,7 @@ def main():
     from check_imports import verify
     for name in ('NetTimeNextNative.exe','NetTimeNextNativeService.exe'):
         verify(ROOT/'target'/'release'/name)
+        verify_privacy(ROOT/'target'/'release'/name)
     metadata=json.loads(run(cargo,'metadata','--locked','--format-version','1',capture=True))
     notices=ROOT/'target'/'third-party-licenses'
     notices.mkdir(parents=True,exist_ok=True)

@@ -2,6 +2,8 @@
 
 ## Identified sources
 
+Addresses below are anonymised documentation addresses, not live endpoints.
+
 The operator identifies 192.0.2.54 as TS1, an ESP32-P4 GNSS-disciplined
 stratum-1 source, and 192.0.2.62 as a GPS-disciplined Raspberry Pi 3B
 stratum-1 source. GPS and PPS are their advertised reference identifiers.
