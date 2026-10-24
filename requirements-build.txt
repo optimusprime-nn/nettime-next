@@ -5,7 +5,7 @@ pyinstaller==6.22.3
 pyinstaller-hooks-contrib==2026.8
 pywin32==312
 pywin32-ctypes==0.2.3
-setuptools==83.0.0
+setuptools==84.1.0
 pyOpenSSL==26.4.0
 cryptography==50.0.2
 service-identity==26.1.0
