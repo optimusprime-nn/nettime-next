@@ -29,7 +29,7 @@ jobs:
         working-directory: native
         run: cargo clippy --locked --all-targets -- -D warnings
       - name: Native installed service lifecycle
-        run: ./native/test-installed.ps1 -Installer ./dist/NetTimeNext-1.0.0-Setup-x64.exe
+        run: ./native/test-installed.ps1 -Installer ./dist/NetTimeNext-1.0.1-Setup-x64.exe
       - name: Native desktop launch check
         run: |
           $desktop = Start-Process ./native/target/release/NetTimeNextNative.exe -ArgumentList '--smoke-ui --software-rendering' -Wait -PassThru
@@ -39,7 +39,7 @@ jobs:
           name: NetTimeNext-Windows-x64
           path: |
             native/target/release/NetTimeNextNative*.exe
-            dist/NetTimeNext-1.0.0-Setup-x64.exe
+            dist/NetTimeNext-1.0.1-Setup-x64.exe
             dist/rust-clock-response.json
             dist/rust-tray-lifecycle.json
             dist/build-manifest.json

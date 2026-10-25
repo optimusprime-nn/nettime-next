@@ -1,11 +1,11 @@
-# NetTime Next 1.0.0
+# NetTime Next 1.0.1
 
 Network time monitoring and controlled synchronization for Windows 10/11 x64.
 The desktop and automatic Windows service run natively without a Python runtime.
 
 ## Install
 
-Download `NetTimeNext-1.0.0-Setup-x64.exe` from the GitHub release and run it
+Download `NetTimeNext-1.0.1-Setup-x64.exe` from the GitHub release and run it
 with administrator approval. Verify its SHA-256 against `SHA256SUMS.txt`.
 This installer is unsigned; Windows may show an unknown-publisher warning.
 
@@ -17,7 +17,10 @@ New installations start in measurement mode. Configure your sources, let their
 filters settle, then choose Settings > Clock control > Take over clock when you
 want NetTime Next to control Windows time. Clock takeover needs administrator
 approval and at least three eligible independent source groups. Corrections are
-gradual; large offsets suspend correction instead of stepping the clock.
+gradual. Offsets above the normal 128 ms tracking limit enter gradual recovery
+after three new agreeing filter samples, up to a separate 10-second recovery
+limit by default. The correction rate stays bounded; larger errors suspend
+correction for manual review. The controller never steps the clock.
 
 Upgrading preserves configured sources, history, service identity, startup state
 and active clock ownership. Existing installations retain their directory and

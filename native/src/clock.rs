@@ -74,6 +74,7 @@ pub struct Plan {
     pub frequency_ppm: f64,
     pub offset_ms: Option<f64>,
     pub windows_reported_rate_ppm: Option<f64>,
+    pub recovering: bool,
 }
 impl Plan {
     fn new(action: &str, rate: f64, reason: impl Into<String>) -> Self {
@@ -84,7 +85,13 @@ impl Plan {
             frequency_ppm: 0.,
             offset_ms: None,
             windows_reported_rate_ppm: None,
+            recovering: false,
         }
+    }
+    fn evidence(mut self, offset: f64, recovering: bool) -> Self {
+        self.offset_ms = offset.is_finite().then_some(offset);
+        self.recovering = recovering;
+        self
     }
 }
 pub struct Planner {
@@ -94,6 +101,7 @@ pub struct Planner {
     frequency: f64,
     rate: f64,
     updates: usize,
+    recovering: bool,
     pub last_good: Option<f64>,
 }
 impl Planner {
@@ -105,6 +113,7 @@ impl Planner {
             frequency: 0.,
             rate: 0.,
             updates: 0,
+            recovering: false,
             last_good: None,
         }
     }
@@ -114,10 +123,11 @@ impl Planner {
     pub fn plan(&mut self, assessment: &Assessment, now: f64) -> Plan {
         let offset = assessment.offset_ms.unwrap_or(f64::NAN);
         let stamp = assessment.sample_mono;
+        let recovering = offset.abs() > self.options.max_offset_ms;
         let reason = if !assessment.ready || !offset.is_finite() {
             Some(assessment.explanation.as_str())
-        } else if offset.abs() > self.options.max_offset_ms {
-            Some("Offset exceeds automatic slew limit; manual review required; no clock step")
+        } else if offset.abs() > self.options.max_recovery_offset_ms {
+            Some("Offset exceeds automatic recovery limit; manual review required; no clock step")
         } else if !stamp.is_finite()
             || now - stamp > self.options.holdover_seconds
             || stamp > now + 1.
@@ -128,19 +138,31 @@ impl Planner {
         };
         if let Some(reason) = reason {
             self.reset();
-            return Plan::new("suspend", 0., reason);
+            return Plan::new("suspend", 0., reason).evidence(offset, false);
         }
+        // Large errors require a fresh confirmation sequence, even when the
+        // ordinary tracking loop was already warm. Reversals restart it too.
+        if recovering && (!self.recovering || offset.signum() != self.last_offset.signum()) {
+            self.reset();
+        }
+        self.recovering = recovering;
         if let Some(last) = self.last_sample {
             if stamp <= last {
                 return Plan::new(
                     "hold",
                     self.rate,
-                    "No newer system-peer filter sample; not reused",
-                );
+                    if recovering {
+                        "Gradual recovery continues; waiting for a newer system-peer filter sample"
+                    } else {
+                        "No newer system-peer filter sample; not reused"
+                    },
+                )
+                .evidence(offset, recovering);
             }
             let elapsed = stamp - last;
             if elapsed > self.options.holdover_seconds {
                 self.reset();
+                self.recovering = recovering;
             } else {
                 let estimate = (offset - self.last_offset) * 1000. / elapsed + self.rate;
                 self.frequency += 0.125
@@ -158,18 +180,29 @@ impl Planner {
                 "warmup",
                 0.,
                 format!(
-                    "Clock filter settling: {}/3 new system-peer samples",
+                    "{}: {}/3 new system-peer samples",
+                    if recovering {
+                        "Large-offset recovery confirming agreement"
+                    } else {
+                        "Clock filter settling"
+                    },
                     self.updates
                 ),
-            );
+            )
+            .evidence(offset, recovering);
         }
         self.rate = (self.frequency + offset * 1000. / 1024.)
             .clamp(-self.options.max_slew_ppm, self.options.max_slew_ppm);
         let mut result = Plan::new(
             "slew",
             self.rate,
-            "Bounded gradual correction; no clock step",
-        );
+            if recovering {
+                "Recovering large offset gradually at the configured rate limit; no clock step"
+            } else {
+                "Bounded gradual correction; no clock step"
+            },
+        )
+        .evidence(offset, recovering);
         result.frequency_ppm = self.frequency;
         result.offset_ms = Some(offset);
         result
@@ -410,7 +443,7 @@ mod tests {
     #[test]
     fn stale_excessive_leap_and_holdover_suspend() {
         let mut p = Planner::new(Clock::default());
-        assert_eq!(p.plan(&assessment(1., 129.), 1.).action, "suspend");
+        assert_eq!(p.plan(&assessment(1., 10_001.), 1.).action, "suspend");
         assert_eq!(p.plan(&assessment(1., 1.), 902.).action, "suspend");
         assert_eq!(p.plan(&assessment(10., 1.), 1.).action, "suspend");
         let mut a = assessment(1., 1.);
@@ -445,5 +478,117 @@ mod tests {
             );
             assert!((rate + drift).abs() < 0.1);
         }
+    }
+    #[test]
+    fn recovery_confirms_new_samples_and_stops_on_lost_agreement() {
+        let calls = Rc::new(RefCell::new(vec![]));
+        let mut c = Controller::new(Clock::default(), Fake(calls.clone())).unwrap();
+        for stamp in [1., 65.] {
+            let plan = c.update(&assessment(stamp, -2_000.), stamp, true).unwrap();
+            assert_eq!(plan.action, "warmup");
+            assert!(plan.recovering);
+            assert_eq!(*calls.borrow().last().unwrap(), 0.);
+            // Repeated assessments do not advance confirmation or apply a rate.
+            assert_eq!(
+                c.update(&assessment(stamp, -2_000.), stamp + 1., true)
+                    .unwrap()
+                    .action,
+                "hold"
+            );
+        }
+        let plan = c.update(&assessment(129., -2_000.), 129., true).unwrap();
+        assert_eq!(plan.action, "slew");
+        assert!(plan.recovering && plan.rate_ppm == -250.);
+        assert_eq!(plan.windows_reported_rate_ppm, Some(-250.));
+        let bad = Assessment {
+            ready: false,
+            ..assessment(193., -2_000.)
+        };
+        assert_eq!(c.update(&bad, 193., true).unwrap().action, "suspend");
+        assert_eq!(*calls.borrow().last().unwrap(), 0.);
+        assert_eq!(
+            c.update(&assessment(257., -2_000.), 257., true)
+                .unwrap()
+                .action,
+            "warmup"
+        );
+        // A sign reversal requires confirmation from scratch.
+        assert_eq!(
+            c.update(&assessment(321., 2_000.), 321., true)
+                .unwrap()
+                .action,
+            "warmup"
+        );
+        assert_eq!(c.planner.updates, 1);
+        assert!(c.update(&assessment(385., 2_000.), 385., false).is_err());
+        assert_eq!(*calls.borrow().last().unwrap(), 0.);
+    }
+    #[test]
+    fn large_offsets_recover_in_both_directions_and_survive_an_outage() {
+        for initial in [-2_000., 2_000.] {
+            for drift in [-35., 35.] {
+                let mut planner = Planner::new(Clock::default());
+                let mut offset = initial;
+                let mut rate = 0.;
+                let mut recovered = false;
+                for step in 0..1600 {
+                    offset -= (drift + rate) * 64. / 1000.;
+                    let stamp = 1. + step as f64 * 64.;
+                    let mut a = assessment(stamp, offset);
+                    // An outage during recovery must pause, then reconfirm.
+                    if (10..30).contains(&step) {
+                        a.ready = false;
+                    }
+                    let plan = planner.plan(&a, stamp);
+                    if !a.ready {
+                        assert_eq!(plan.action, "suspend");
+                    } else {
+                        assert_ne!(plan.action, "suspend");
+                    }
+                    assert!(plan.rate_ppm.abs() <= 250.);
+                    recovered |= plan.action == "slew" && plan.recovering;
+                    rate = plan.rate_ppm;
+                }
+                assert!(recovered);
+                assert!(
+                    offset.abs() < 0.1,
+                    "initial={initial}, drift={drift}, remaining={offset}"
+                );
+                assert!((rate + drift).abs() < 0.1);
+            }
+        }
+    }
+    #[test]
+    fn recovery_rejects_stale_evidence_and_can_be_disabled_by_its_limit() {
+        let mut p = Planner::new(Clock::default());
+        let plan = p.plan(&assessment(1., -2_000.), 902.);
+        assert_eq!(plan.action, "suspend");
+        assert_eq!(plan.offset_ms, Some(-2_000.));
+        let mut p = Planner::new(Clock {
+            max_recovery_offset_ms: 128.,
+            ..Clock::default()
+        });
+        assert_eq!(p.plan(&assessment(1., 129.), 1.).action, "suspend");
+        let mut p = Planner::new(Clock::default());
+        let mut a = assessment(1., 2_000.);
+        a.offset_ms = Some(f64::NAN);
+        assert_eq!(p.plan(&a, 1.).action, "suspend");
+    }
+    #[test]
+    fn leaving_normal_tracking_requires_fresh_recovery_confirmation() {
+        let mut p = Planner::new(Clock::default());
+        for stamp in [1., 65., 129.] {
+            p.plan(&assessment(stamp, -20.), stamp);
+        }
+        let first = p.plan(&assessment(193., -2_000.), 193.);
+        assert_eq!(first.action, "warmup");
+        assert_eq!(first.rate_ppm, 0.);
+        assert!(first.recovering);
+        assert_eq!(p.plan(&assessment(257., -2_000.), 257.).action, "warmup");
+        assert_eq!(p.plan(&assessment(321., -2_000.), 321.).action, "slew");
+        // Returning inside the tracking threshold retains the learned rate loop.
+        let normal = p.plan(&assessment(385., -100.), 385.);
+        assert_eq!(normal.action, "slew");
+        assert!(!normal.recovering);
     }
 }

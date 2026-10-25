@@ -344,8 +344,8 @@ pub fn readiness(cfg: &Config, decision: &serde_json::Value, now: f64) -> Result
         "Filtered sample expired"
     );
     ensure!(
-        offset.is_finite() && offset.abs() <= cfg.clock.max_offset_ms,
-        "Offset exceeds automatic slew limit; no clock step"
+        offset.is_finite() && offset.abs() <= cfg.clock.max_recovery_offset_ms,
+        "Offset exceeds automatic recovery limit; no clock step"
     );
     Ok(())
 }
@@ -681,11 +681,14 @@ mod tests {
         assert!(readiness(&cfg, &d, 1000.).is_ok());
         assert!(readiness(&cfg, &d, 1200.).is_err());
         d["synchronization"]["offset_ms"] = json!(129.);
+        assert!(readiness(&cfg, &d, 1000.).is_ok());
+        d["synchronization"]["offset_ms"] = json!(10_001.);
         assert!(readiness(&cfg, &d, 1000.).is_err());
         d["synchronization"]["offset_ms"] = json!(1.);
         d["synchronization"]["sample_utc"] = json!(1001.);
         assert!(readiness(&cfg, &d, 1000.).is_err());
         cfg.clock.max_offset_ms = 0.5;
+        cfg.clock.max_recovery_offset_ms = 0.5;
         d["synchronization"]["sample_utc"] = json!(1000.);
         assert!(readiness(&cfg, &d, 1000.).is_err());
     }

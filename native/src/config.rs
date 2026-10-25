@@ -40,6 +40,7 @@ pub struct Clock {
     #[serde(deserialize_with = "source_count")]
     pub min_sources: usize,
     pub max_offset_ms: f64,
+    pub max_recovery_offset_ms: f64,
     pub max_slew_ppm: f64,
     pub holdover_seconds: f64,
 }
@@ -50,6 +51,7 @@ impl Default for Clock {
             require_nts: false,
             min_sources: 3,
             max_offset_ms: 128.,
+            max_recovery_offset_ms: 10_000.,
             max_slew_ppm: 250.,
             holdover_seconds: 900.,
         }
@@ -117,6 +119,12 @@ impl Config {
             ("retention", self.retention_days, 1., 3650.),
             ("distance", self.max_distance_ms, 1., 10000.),
             ("offset", self.clock.max_offset_ms, 1., 128.),
+            (
+                "recovery offset",
+                self.clock.max_recovery_offset_ms,
+                1.,
+                60_000.,
+            ),
             ("slew", self.clock.max_slew_ppm, 1., 500.),
             ("holdover", self.clock.holdover_seconds, 64., 3600.),
         ] {
@@ -125,6 +133,10 @@ impl Config {
                 "{name} outside permitted range"
             );
         }
+        ensure!(
+            self.clock.max_recovery_offset_ms >= self.clock.max_offset_ms,
+            "Recovery limit must be at least the normal tracking limit"
+        );
         ensure!(
             (3..=32).contains(&self.clock.min_sources),
             "Need 3–32 independent groups"
@@ -205,5 +217,21 @@ mod tests {
             serde_json::from_str::<Config>(r#"{"servers":[{"host":"ntp.invalid","port":65536}]}"#)
                 .is_err()
         );
+    }
+    #[test]
+    fn existing_settings_gain_bounded_recovery_and_validate_its_limit() {
+        let mut cfg: Config = serde_json::from_str(
+            r#"{"servers":[{"host":"ntp.invalid"}],"clock":{"mode":"slew","max_offset_ms":128}}"#,
+        )
+        .unwrap();
+        cfg.validate().unwrap();
+        assert_eq!(cfg.clock.max_recovery_offset_ms, 10_000.);
+        assert_eq!(cfg.clock.mode, "slew");
+        for invalid in [0., 127., 60_001., f64::NAN] {
+            cfg.clock.max_recovery_offset_ms = invalid;
+            assert!(cfg.validate().is_err());
+        }
+        cfg.clock.max_recovery_offset_ms = 128.;
+        cfg.validate().unwrap();
     }
 }

@@ -34,6 +34,7 @@
     "min_sources": 3,
     "max_offset_ms": 128,
     "max_slew_ppm": 250,
-    "holdover_seconds": 900
+    "holdover_seconds": 900,
+    "max_recovery_offset_ms": 10000
   }
 }

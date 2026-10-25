@@ -67,8 +67,8 @@ def main():
         packages.append(dict(name=package['name'],version=package['version'],license=package['license'],repository=package['repository'],license_files=licenses))
     (notices/'DEPENDENCIES.json').write_text(json.dumps(packages,indent=2)+'\n',encoding='utf-8')
     run(args.iscc.resolve(),ROOT/'installer.iss')
-    installer=ROOT.parent/'dist'/'NetTimeNext-1.0.0-Setup-x64.exe'
-    manifest=dict(version='1.0.0',stage='First Windows x64 release',installer=installer.name,
+    installer=ROOT.parent/'dist'/'NetTimeNext-1.0.1-Setup-x64.exe'
+    manifest=dict(version='1.0.1',stage='Bounded automatic clock recovery',installer=installer.name,
                   sha256=hashlib.sha256(installer.read_bytes()).hexdigest(),
                   source_commit=run('git','rev-parse','HEAD',capture=True).strip(),
                   source_dirty=bool(run('git','status','--porcelain','--untracked-files=no',capture=True)),

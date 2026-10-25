@@ -1,3 +1,9 @@
+## 1.0.1
+
+- Recovers gradually from larger offsets after three new agreeing filter samples, keeping the configured rate limit and ownership/holdover safeguards.
+- Adds a configurable automatic recovery limit (10 seconds by default), recovery status and offset evidence for suspended decisions.
+- Existing configurations adopt the recovery default without changing saved settings or clock ownership.
+
 ## 0.4.3-preview
 
 - Enables Save and apply during Rust clock ownership, preserving the original takeover journal, service identity, clock rights and disabled competing controllers.
