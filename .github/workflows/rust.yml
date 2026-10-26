@@ -7,40 +7,39 @@ on:
     paths: ['native/**', '.github/workflows/rust.yml', 'desktop.manifest', 'nettime.ico']
 permissions:
   contents: read
+# Build, unit tests, static analysis and packaging only. The shared self-hosted
+# build VM is persistent and runs jobs as a standard user, so installed-service
+# lifecycle, desktop launch and physical clock tests stay off it until a
+# disposable, repository-only Windows VM exists for them.
 jobs:
   native:
-    runs-on: windows-2022
-    timeout-minutes: 25
+    runs-on: [self-hosted, windows, msvc]
+    timeout-minutes: 40
+    defaults:
+      run:
+        shell: pwsh
     steps:
       - uses: actions/checkout@v4
-      - uses: dtolnay/rust-toolchain@stable
-      - uses: Swatinem/rust-cache@v2
-        with:
-          workspaces: native -> target
-          cache-on-failure: true
-      - uses: actions/setup-python@v5
-        with:
-          python-version: '3.11'
+      - name: Rust toolchain
+        run: |
+          rustup update stable --no-self-update
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          rustc --version; cargo --version; cargo clippy --version
+          py -3.11 --version
       - name: Package Windows release
         run: |
           $compiler = & ./scripts/Get-InnoSetup.ps1 -Destination "$env:RUNNER_TEMP/nettime-inno"
-          python ./native/package.py --iscc $compiler
+          py -3.11 ./native/package.py --iscc $compiler
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
       - name: Native static analysis
         working-directory: native
         run: cargo clippy --locked --all-targets -- -D warnings
-      - name: Native installed service lifecycle
-        run: ./native/test-installed.ps1 -Installer ./dist/NetTimeNext-1.0.1-Setup-x64.exe
-      - name: Native desktop launch check
-        run: |
-          $desktop = Start-Process ./native/target/release/NetTimeNextNative.exe -ArgumentList '--smoke-ui --software-rendering' -Wait -PassThru
-          if ($desktop.ExitCode -ne 0) { exit $desktop.ExitCode }
       - uses: actions/upload-artifact@v4
         with:
           name: NetTimeNext-Windows-x64
           path: |
             native/target/release/NetTimeNextNative*.exe
             dist/NetTimeNext-1.0.1-Setup-x64.exe
-            dist/rust-clock-response.json
-            dist/rust-tray-lifecycle.json
             dist/build-manifest.json
             dist/SHA256SUMS.txt
+          if-no-files-found: error

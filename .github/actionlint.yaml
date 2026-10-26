@@ -1,0 +1,5 @@
+self-hosted-runner:
+  # Custom labels on the owner's self-hosted Windows build runner.
+  labels:
+    - msvc
+    - win2025

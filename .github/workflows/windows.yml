@@ -7,38 +7,37 @@ on:
 permissions:
   contents: read
 
+# Legacy Python build, unit tests and packaging only. The shared self-hosted
+# build VM is persistent and runs jobs as a standard user, so the installed
+# service lifecycle test stays off it until a disposable, repository-only
+# Windows VM exists for it.
 jobs:
   windows:
-    runs-on: windows-2022
+    runs-on: [self-hosted, windows, msvc]
     timeout-minutes: 25
+    defaults:
+      run:
+        shell: pwsh
     steps:
       - uses: actions/checkout@v4
-      - uses: actions/setup-python@v5
-        with:
-          python-version: '3.11'
-          architecture: x64
-          cache: pip
-          cache-dependency-path: requirements-build.txt
+      - name: Create build environment
+        run: |
+          # setup-python would install system-wide, which the runner's standard account cannot do.
+          py -3.11 -m venv "$env:RUNNER_TEMP/venv"
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          Join-Path $env:RUNNER_TEMP 'venv\Scripts' | Out-File -FilePath $env:GITHUB_PATH -Append
       - name: Install pinned build dependencies
-        run: python -m pip install -r requirements-build.txt
+        run: |
+          python -m pip install -r requirements-build.txt
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
       - name: Install verified Inno Setup compiler
-        shell: pwsh
         run: |
           $compiler = & ./scripts/Get-InnoSetup.ps1 -Destination "$env:RUNNER_TEMP/nettime-inno"
           "NETTIME_ISCC=$compiler" | Out-File -FilePath $env:GITHUB_ENV -Append
       - name: Test and package installer
-        run: python build.py --iscc "$env:NETTIME_ISCC"
-      - name: Test installed service lifecycle
-        timeout-minutes: 8
-        shell: pwsh
-        env:
-          GH_TOKEN: ${{ github.token }}
         run: |
-          $version = python -c "from runtime_paths import VERSION; print(VERSION)"
-          $previous = "$env:RUNNER_TEMP/nettime-previous"
-          gh release download v0.2.0 --repo "$env:GITHUB_REPOSITORY" --pattern 'NetTimeNext-0.2.0-Setup-x64.exe' --dir $previous
-          if ($LASTEXITCODE -ne 0) { throw 'Previous installer download failed' }
-          ./scripts/Test-InstalledBuild.ps1 -Installer "./dist/NetTimeNext-$version-Setup-x64.exe" -PreviousInstaller "$previous/NetTimeNext-0.2.0-Setup-x64.exe"
+          python build.py --iscc "$env:NETTIME_ISCC"
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
       - uses: actions/upload-artifact@v4
         with:
           name: NetTimeNext-Windows-x64
@@ -46,5 +45,4 @@ jobs:
             dist/*Setup-x64.exe
             dist/build-manifest.json
             dist/SHA256SUMS.txt
-            dist/clock-response.json
           if-no-files-found: error
