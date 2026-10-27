@@ -148,6 +148,15 @@ pub fn parse(raw: &[u8], stamp: &[u8], s: &mut Sample) -> Result<()> {
     .into();
     Ok(())
 }
+/// The request's transmit timestamp, which the reply must echo. Its low 24
+/// fraction bits (under 4 ms) are random, so an off-path attacker cannot guess
+/// it from the send time; with only 8 random bits a spoofed plain-NTP reply
+/// had a 1-in-256 chance per guess.
+fn origin_stamp(t1: f64) -> Result<[u8; 8]> {
+    let mut stamp = encode(t1);
+    getrandom::fill(&mut stamp[5..]).map_err(|e| anyhow::anyhow!("Random source: {e}"))?;
+    Ok(stamp)
+}
 pub fn query(server: &Server, timeout: f64, poll: f64, client: &mut NtsClient) -> Sample {
     let mut s = Sample {
         host: server.host.clone(),
@@ -198,8 +207,7 @@ pub fn query(server: &Server, timeout: f64, poll: f64, client: &mut NtsClient) -
         header[3] = (-20i8) as u8;
         s.t1 = utc();
         let start = mono();
-        let mut stamp = encode(s.t1);
-        getrandom::fill(&mut stamp[7..]).map_err(|e| anyhow::anyhow!("Random source: {e}"))?;
+        let stamp = origin_stamp(s.t1)?;
         header[40..48].copy_from_slice(&stamp);
         s.request_hex = hex::encode(header);
         s.request_transmit_utc = decode(&stamp, s.t1);
@@ -313,6 +321,17 @@ mod tests {
             ..Default::default()
         };
         parse(&raw, &stamp, &mut s)
+    }
+    #[test]
+    fn origin_timestamp_is_unpredictable_but_close() {
+        let at = 1_800_000_000.25;
+        let stamps: std::collections::HashSet<_> =
+            (0..64).map(|_| origin_stamp(at).unwrap()).collect();
+        assert_eq!(stamps.len(), 64);
+        for stamp in stamps {
+            assert_eq!(stamp[..5], encode(at)[..5]);
+            assert!((decode(&stamp, at) - at).abs() < 0.004);
+        }
     }
     #[test]
     fn coarse_server_precision_does_not_allow_large_negative_delay() {
