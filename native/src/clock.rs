@@ -100,6 +100,10 @@ pub struct Planner {
     last_offset: f64,
     frequency: f64,
     rate: f64,
+    /// When each rate took effect (monotonic seconds), kept back to the last
+    /// sample, so the frequency estimate uses the rates actually applied
+    /// between two sample times rather than only the current one.
+    rate_log: Vec<(f64, f64)>,
     updates: usize,
     recovering: bool,
     pub last_good: Option<f64>,
@@ -112,6 +116,7 @@ impl Planner {
             last_offset: 0.,
             frequency: 0.,
             rate: 0.,
+            rate_log: vec![],
             updates: 0,
             recovering: false,
             last_good: None,
@@ -119,6 +124,32 @@ impl Planner {
     }
     pub fn reset(&mut self) {
         *self = Self::new(self.options.clone());
+    }
+    fn set_rate(&mut self, rate: f64, now: f64) {
+        self.rate = rate;
+        self.rate_log.push((now, rate));
+    }
+    /// Mean applied rate over [from, to]; zero before the first logged rate,
+    /// as the clock starts and resumes from the neutral rate.
+    fn mean_rate(&self, from: f64, to: f64) -> f64 {
+        if to <= from {
+            return self.rate;
+        }
+        let (mut total, mut time, mut rate) = (0., from, 0.);
+        for &(at, next) in &self.rate_log {
+            if at <= from {
+                rate = next;
+                continue;
+            }
+            if at >= to {
+                break;
+            }
+            total += rate * (at - time);
+            time = at;
+            rate = next;
+        }
+        total += rate * (to - time);
+        total / (to - from)
     }
     pub fn plan(&mut self, assessment: &Assessment, now: f64) -> Plan {
         let offset = assessment.offset_ms.unwrap_or(f64::NAN);
@@ -164,7 +195,8 @@ impl Planner {
                 self.reset();
                 self.recovering = recovering;
             } else {
-                let estimate = (offset - self.last_offset) * 1000. / elapsed + self.rate;
+                let estimate =
+                    (offset - self.last_offset) * 1000. / elapsed + self.mean_rate(last, stamp);
                 self.frequency += 0.125
                     * (estimate.clamp(-self.options.max_slew_ppm, self.options.max_slew_ppm)
                         - self.frequency);
@@ -172,10 +204,14 @@ impl Planner {
         }
         self.last_sample = Some(stamp);
         self.last_offset = offset;
+        // Keep the rate in force at this sample time and everything after it.
+        if let Some(keep) = self.rate_log.iter().rposition(|&(at, _)| at <= stamp) {
+            self.rate_log.drain(..keep);
+        }
         self.last_good = Some(now);
         self.updates += 1;
         if self.updates < 3 {
-            self.rate = 0.;
+            self.set_rate(0., now);
             return Plan::new(
                 "warmup",
                 0.,
@@ -191,8 +227,11 @@ impl Planner {
             )
             .evidence(offset, recovering);
         }
-        self.rate = (self.frequency + offset * 1000. / 1024.)
-            .clamp(-self.options.max_slew_ppm, self.options.max_slew_ppm);
+        self.set_rate(
+            (self.frequency + offset * 1000. / 1024.)
+                .clamp(-self.options.max_slew_ppm, self.options.max_slew_ppm),
+            now,
+        );
         let mut result = Plan::new(
             "slew",
             self.rate,
@@ -509,6 +548,35 @@ mod tests {
         let plan = c.update(&assessment(257., 100.), 257., true).unwrap();
         assert_eq!(plan.action, "warmup");
         assert!(c.watchdog(258., Ownership::Conflict).is_err());
+    }
+    #[test]
+    fn frequency_estimate_tracks_a_drifting_clock_with_old_samples() {
+        // A local clock 20 ppm slow, measured through filter samples that are
+        // 400 s old when they are used, as at a long holdover with poll 64 s.
+        const DRIFT: f64 = 20.;
+        let mut p = Planner::new(Clock::default());
+        let mut applied: Vec<(f64, f64)> = vec![(0., 0.)];
+        let offset_at = |applied: &[(f64, f64)], t: f64| {
+            let mut total = 0.;
+            for (i, &(from, rate)) in applied.iter().enumerate() {
+                let to = applied.get(i + 1).map_or(t, |next| next.0).min(t);
+                if to > from {
+                    total += (DRIFT - rate) * (to - from) / 1000.;
+                }
+            }
+            total
+        };
+        let mut worst_late = 0_f64;
+        for k in 1..=120 {
+            let stamp = 64. * k as f64;
+            let now = stamp + 400.;
+            let plan = p.plan(&assessment(stamp, offset_at(&applied, stamp)), now);
+            applied.push((now, plan.rate_ppm));
+            if k > 60 {
+                worst_late = worst_late.max((p.frequency - DRIFT).abs());
+            }
+        }
+        assert!(worst_late < 1., "frequency error {worst_late:.3} ppm");
     }
     #[test]
     fn stale_excessive_leap_and_holdover_suspend() {
