@@ -27,13 +27,18 @@ pub struct Monitor {
     instance: String,
     maintenance: Option<thread::JoinHandle<Result<Value>>>,
     last_clock_event: String,
-    // Writes held back while another connection keeps the database locked.
-    unsaved: Vec<Sample>,
+    // Cycles (with their own decisions) and events held back while another
+    // connection keeps the database locked.
+    unsaved: std::collections::VecDeque<(i64, Vec<Sample>, Value)>,
     events: Vec<(f64, String, Value)>,
     blocked_since: Option<f64>,
+    // Cycles dropped from a full queue: count, samples, first and last utc.
+    lost: Option<(usize, usize, f64, f64)>,
+    max_unsaved_cycles: usize,
 }
-/// Bounds on what is held in memory while the database stays locked.
-const MAX_UNSAVED_SAMPLES: usize = 4096;
+/// Bounds on what is held in memory while the database stays locked
+/// (1024 cycles is about 18 hours at the shortest poll).
+const MAX_UNSAVED_CYCLES: usize = 1024;
 const MAX_UNSAVED_EVENTS: usize = 1024;
 impl Monitor {
     pub fn new(cfg: Config, mut store: Store) -> Result<Self> {
@@ -78,9 +83,11 @@ impl Monitor {
             instance: String::new(),
             maintenance: None,
             last_clock_event: String::new(),
-            unsaved: Vec::new(),
+            unsaved: Default::default(),
             events: Vec::new(),
             blocked_since: None,
+            lost: None,
+            max_unsaved_cycles: MAX_UNSAVED_CYCLES,
         })
     }
     pub fn for_service(cfg: Config, store: Store, root: &std::path::Path) -> Result<Self> {
@@ -238,30 +245,50 @@ impl Monitor {
         }
         Ok(())
     }
-    /// Writes queued events and measurements. A reader holding the database past
-    /// the busy timeout defers the write to the next cycle instead of stopping
-    /// the service; clock correction does not depend on history.
+    /// Writes queued events and cycles. A reader holding the database past the
+    /// busy timeout defers the write to the next cycle instead of stopping the
+    /// service; clock correction does not depend on history. Each deferred
+    /// cycle keeps its own number, samples and decision.
     fn persist(
         &mut self,
         samples: Vec<Sample>,
         decision: &Value,
         states: &[(String, Value)],
     ) -> Result<()> {
-        self.unsaved.extend(samples);
-        let excess = self.unsaved.len().saturating_sub(MAX_UNSAVED_SAMPLES);
-        self.unsaved.drain(..excess);
-        let result = self
-            .flush_events()
-            .and_then(|()| self.store.save(self.cycle, &self.unsaved, decision, states));
+        if self.unsaved.len() >= self.max_unsaved_cycles
+            && let Some((_, dropped, old)) = self.unsaved.pop_front()
+        {
+            let at = old["utc"].as_f64().unwrap_or(0.);
+            let lost = self.lost.get_or_insert((0, 0, at, at));
+            lost.0 += 1;
+            lost.1 += dropped.len();
+            lost.3 = at;
+        }
+        self.unsaved
+            .push_back((self.cycle, samples, decision.clone()));
+        self.cycle += 1;
+        let result = self.flush_events().and_then(|()| {
+            let cycles: Vec<_> = self
+                .unsaved
+                .iter()
+                .map(|(cycle, samples, decision)| (*cycle, samples.as_slice(), decision))
+                .collect();
+            self.store.save_cycles(&cycles, states)
+        });
         match result {
             Ok(()) => {
+                let saved = self.unsaved.len();
                 self.unsaved.clear();
-                self.cycle += 1;
                 if let Some(since) = self.blocked_since.take() {
-                    self.record(
-                        "history_write_resumed",
-                        json!({"blocked_seconds":utc()-since,"reason":"Another program held the history database locked"}),
-                    );
+                    let mut evidence = json!({"blocked_seconds":utc()-since,"deferred_cycles_saved":saved,"reason":"Another program held the history database locked"});
+                    if let Some((cycles, samples, first, last)) = self.lost.take() {
+                        // History between these times is incomplete.
+                        evidence["lost_cycles"] = json!(cycles);
+                        evidence["lost_samples"] = json!(samples);
+                        evidence["lost_from_utc"] = json!(first);
+                        evidence["lost_to_utc"] = json!(last);
+                    }
+                    self.record("history_write_resumed", evidence);
                 }
                 Ok(())
             }
@@ -319,20 +346,83 @@ mod tests {
             .query_row("SELECT count(*) FROM samples", [], |r| r.get(0))
             .unwrap();
         monitor.record("proof", json!({}));
+        let decision = |selected: &str, at: f64| json!({"selected":selected,"utc":at});
         monitor
-            .persist(vec![sample("a")], &json!({"selected":null}), &[])
+            .persist(vec![sample("a")], &decision("a", 1000.), &[])
             .unwrap();
-        assert_eq!(monitor.cycle, cycle);
+        monitor
+            .persist(vec![sample("b")], &decision("b", 1064.), &[])
+            .unwrap();
+        assert_eq!(monitor.unsaved.len(), 2);
         assert!(monitor.blocked_since.is_some());
         reader.db.execute_batch("COMMIT").unwrap();
         monitor
-            .persist(vec![sample("b")], &json!({"selected":null}), &[])
+            .persist(vec![sample("c")], &decision("c", 1128.), &[])
             .unwrap();
-        assert_eq!(monitor.cycle, cycle + 1);
+        assert_eq!(monitor.cycle, cycle + 3);
         let count = |sql: &str| -> i64 { reader.db.query_row(sql, [], |r| r.get(0)).unwrap() };
-        assert_eq!(count("SELECT count(*) FROM samples"), 2);
+        assert_eq!(count("SELECT count(*) FROM samples"), 3);
+        assert_eq!(count("SELECT count(DISTINCT cycle) FROM samples"), 3);
         assert_eq!(count("SELECT count(*) FROM events WHERE kind='proof'"), 1);
+        let mut q = reader
+            .db
+            .prepare("SELECT cycle,utc,selected FROM decisions ORDER BY cycle")
+            .unwrap();
+        let rows: Vec<(i64, f64, String)> = q
+            .query_map([], |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)))
+            .unwrap()
+            .map(Result::unwrap)
+            .collect();
+        assert_eq!(
+            rows,
+            [
+                (cycle, 1000., "a".into()),
+                (cycle + 1, 1064., "b".into()),
+                (cycle + 2, 1128., "c".into())
+            ]
+        );
+        drop(q);
         assert_eq!(monitor.events[0].1, "history_write_resumed");
+        assert_eq!(monitor.events[0].2["deferred_cycles_saved"], 3);
+        assert!(monitor.events[0].2.get("lost_cycles").is_none());
+        drop((reader, monitor));
+        std::fs::remove_dir_all(root).unwrap();
+    }
+    #[test]
+    fn full_deferral_queue_reports_the_lost_interval() {
+        let root = std::env::current_dir().unwrap().join("work").join(format!(
+            "lost-history-{}-{}",
+            std::process::id(),
+            utc().to_bits()
+        ));
+        let path = root.join("history.sqlite3");
+        let store = Store::open(&path, false).unwrap();
+        store.db.busy_timeout(Duration::ZERO).unwrap();
+        let mut monitor = Monitor::new(Config::default(), store).unwrap();
+        monitor.max_unsaved_cycles = 8;
+        let reader = Store::open(&path, true).unwrap();
+        reader.db.execute_batch("BEGIN").unwrap();
+        let _: i64 = reader
+            .db
+            .query_row("SELECT count(*) FROM samples", [], |r| r.get(0))
+            .unwrap();
+        for i in 0..10 {
+            let sample = Sample {
+                status: "valid".into(),
+                ..Default::default()
+            };
+            monitor
+                .persist(vec![sample], &json!({"utc":i as f64}), &[])
+                .unwrap();
+        }
+        assert_eq!(monitor.unsaved.len(), 8);
+        reader.db.execute_batch("COMMIT").unwrap();
+        monitor.persist(vec![], &json!({"utc":9999.}), &[]).unwrap();
+        let resumed = &monitor.events[0].2;
+        assert_eq!(resumed["lost_cycles"], 3);
+        assert_eq!(resumed["lost_samples"], 3);
+        assert_eq!(resumed["lost_from_utc"], 0.);
+        assert_eq!(resumed["lost_to_utc"], 2.);
         drop((reader, monitor));
         std::fs::remove_dir_all(root).unwrap();
     }

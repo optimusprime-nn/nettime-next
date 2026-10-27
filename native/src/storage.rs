@@ -152,6 +152,7 @@ impl Store {
             .optional()?;
         Ok(raw.map(|r| serde_json::from_str(&r)).transpose()?)
     }
+    #[cfg(test)]
     pub fn save(
         &mut self,
         cycle: i64,
@@ -159,12 +160,23 @@ impl Store {
         decision: &Value,
         states: &[(String, Value)],
     ) -> Result<()> {
+        self.save_cycles(&[(cycle, samples, decision)], states)
+    }
+    /// Saves one or more collection cycles in one transaction, each with its own
+    /// samples and decision; the last decision becomes the live state.
+    pub fn save_cycles(
+        &mut self,
+        cycles: &[(i64, &[Sample], &Value)],
+        states: &[(String, Value)],
+    ) -> Result<()> {
         let tx = self.db.transaction()?;
-        tx.execute(
-            "INSERT OR REPLACE INTO live_state(id,cycle,payload) VALUES(1,?,?)",
-            params![cycle, decision.to_string()],
-        )?;
-        if self.logging_enabled {
+        if let Some((cycle, _, decision)) = cycles.last() {
+            tx.execute(
+                "INSERT OR REPLACE INTO live_state(id,cycle,payload) VALUES(1,?,?)",
+                params![cycle, decision.to_string()],
+            )?;
+        }
+        for &(cycle, samples, decision) in cycles.iter().filter(|_| self.logging_enabled) {
             for s in samples {
                 let valid = s.status == "valid";
                 let mut data = s.data();
@@ -180,7 +192,7 @@ impl Store {
                 "INSERT INTO decisions(cycle,utc,selected,confidence,payload) VALUES(?,?,?,?,?)",
                 params![
                     cycle,
-                    utc(),
+                    decision["utc"].as_f64().unwrap_or_else(utc),
                     decision["selected"].as_str(),
                     decision["confidence"].as_str().unwrap_or(""),
                     if self.diagnostic_logging {
