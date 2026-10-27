@@ -349,10 +349,11 @@ impl Store {
             serde_json::json!({"compressed_records":compressed,"space_reclaimed":reclaimed,"retention_days":days}),
         )
     }
-    pub fn history(&self, host: &str, port: u16) -> Result<Vec<[f64; 2]>> {
-        let mut q=self.db.prepare("SELECT utc,offset_ms FROM samples WHERE host=? AND port=? AND status='valid' ORDER BY utc,id")?;
+    /// Valid offsets for one source since `since` (Unix seconds; 0 for all).
+    pub fn history(&self, host: &str, port: u16, since: f64) -> Result<Vec<[f64; 2]>> {
+        let mut q=self.db.prepare("SELECT utc,offset_ms FROM samples WHERE host=? AND port=? AND status='valid' AND utc>=? ORDER BY utc,id")?;
         Ok(
-            q.query_map(params![host, port], |r| Ok([r.get(0)?, r.get(1)?]))?
+            q.query_map(params![host, port, since], |r| Ok([r.get(0)?, r.get(1)?]))?
                 .collect::<rusqlite::Result<Vec<_>>>()?,
         )
     }

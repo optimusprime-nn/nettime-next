@@ -283,7 +283,8 @@ impl Desktop {
             ui.weak("* Recommended source · Offset is server time minus this PC’s time. Stratum is the source’s distance in NTP hops from its reference.");
             if let Some(key) = clicked {
                 self.selected = key;
-                self.load_history();
+                self.history.clear();
+                self.request_refresh();
             }
         });
         ui.add_space(12.);
@@ -305,7 +306,12 @@ impl Desktop {
                     (168., "7 days"),
                     (0., "All retained"),
                 ] {
-                    ui.selectable_value(&mut self.history_hours, hours, label);
+                    if ui
+                        .selectable_value(&mut self.history_hours, hours, label)
+                        .changed()
+                    {
+                        self.request_refresh();
+                    }
                 }
             });
             let cutoff = if self.history_hours > 0. {
