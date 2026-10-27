@@ -445,11 +445,14 @@ pub fn activate(root: &Path, backend: &mut impl Services) -> Result<()> {
     };
     save(root, &j)?;
     drop(store);
-    Store::open(&root.join("data/history.sqlite3"), false)?.event(
-        "takeover_prepared",
-        &json!({"services":j.controllers,"assessment":decision["synchronization"]}),
-    )?;
+    // Everything after the prepared journal is saved, including this log
+    // write, runs inside the rollback scope; a failure must not leave the
+    // journal stuck at "prepared".
     let result = (|| -> Result<()> {
+        Store::open(&root.join("data/history.sqlite3"), false)?.event(
+            "takeover_prepared",
+            &json!({"services":j.controllers,"assessment":decision["synchronization"]}),
+        )?;
         backend.change(service::NAME, false)?;
         backend.privilege(Some(true))?;
         for s in &j.controllers {
@@ -698,6 +701,23 @@ mod tests {
             );
             assert_restored(&fixture, &backend, &original);
         }
+    }
+    #[test]
+    fn failed_takeover_log_write_rolls_back() {
+        let fixture = Fixture::new();
+        Store::open(&fixture.root.join("data/history.sqlite3"), false)
+            .unwrap()
+            .db
+            .execute_batch(
+                "CREATE TRIGGER fail BEFORE INSERT ON events WHEN NEW.kind='takeover_prepared'
+                 BEGIN SELECT RAISE(ABORT,'injected log failure'); END",
+            )
+            .unwrap();
+        let mut backend = Fake::new();
+        let original = backend.states.clone();
+        let error = activate(&fixture.root, &mut backend).unwrap_err();
+        assert!(format!("{error:#}").contains("injected log failure"));
+        assert_restored(&fixture, &backend, &original);
     }
     #[test]
     fn rollback_is_retryable_and_preserves_existing_privilege() {
