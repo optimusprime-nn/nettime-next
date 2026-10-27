@@ -372,11 +372,7 @@ mod tests {
     }
     #[test]
     fn folder_created_by_this_user_is_untrusted_unless_elevated() {
-        let root = std::env::current_dir().unwrap().join("work").join(format!(
-            "untrusted-{}-{}",
-            std::process::id(),
-            crate::protocol::utc().to_bits()
-        ));
+        let root = crate::test_dir("untrusted");
         std::fs::create_dir_all(root.join("data")).unwrap();
         std::fs::write(root.join("settings.json"), b"{}").unwrap();
         let planted = root.join("data").join("settings-update.json");

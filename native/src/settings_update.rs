@@ -277,11 +277,7 @@ mod tests {
         }
     }
     fn fixture() -> (std::path::PathBuf, Config, Backend) {
-        let root = std::env::current_dir().unwrap().join("work").join(format!(
-            "nettime-settings-{}-{}",
-            std::process::id(),
-            crate::protocol::utc().to_bits()
-        ));
+        let root = crate::test_dir("nettime-settings");
         std::fs::create_dir_all(root.join("data")).unwrap();
         Store::open(&root.join("data/history.sqlite3"), false).unwrap();
         let own = Snapshot {

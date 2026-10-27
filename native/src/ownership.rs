@@ -625,11 +625,7 @@ mod tests {
     }
     impl Fixture {
         fn new() -> Self {
-            let root = std::env::current_dir().unwrap().join("work").join(format!(
-                "ownership-{}-{}",
-                std::process::id(),
-                (utc() * 1e9) as u128
-            ));
+            let root = crate::test_dir("ownership");
             std::fs::create_dir_all(root.join("data")).unwrap();
             let mut cfg = Config::default();
             cfg.servers.push(crate::config::Server {

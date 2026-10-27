@@ -322,11 +322,7 @@ mod tests {
     use super::*;
     #[test]
     fn locked_database_defers_history_instead_of_failing() {
-        let root = std::env::current_dir().unwrap().join("work").join(format!(
-            "locked-history-{}-{}",
-            std::process::id(),
-            utc().to_bits()
-        ));
+        let root = crate::test_dir("locked-history");
         let path = root.join("history.sqlite3");
         let store = Store::open(&path, false).unwrap();
         store.db.busy_timeout(Duration::from_millis(50)).unwrap();
@@ -390,11 +386,7 @@ mod tests {
     }
     #[test]
     fn full_deferral_queue_reports_the_lost_interval() {
-        let root = std::env::current_dir().unwrap().join("work").join(format!(
-            "lost-history-{}-{}",
-            std::process::id(),
-            utc().to_bits()
-        ));
+        let root = crate::test_dir("lost-history");
         let path = root.join("history.sqlite3");
         let store = Store::open(&path, false).unwrap();
         store.db.busy_timeout(Duration::ZERO).unwrap();

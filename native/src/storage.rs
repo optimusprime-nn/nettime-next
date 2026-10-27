@@ -398,11 +398,7 @@ mod tests {
     use serde_json::json;
     #[test]
     fn pending_settings_do_not_purge_history_before_administrator_commit() {
-        let root = std::env::current_dir().unwrap().join("work").join(format!(
-            "pending-retention-{}-{}",
-            std::process::id(),
-            utc().to_bits()
-        ));
+        let root = crate::test_dir("pending-retention");
         let path = root.join("data/history.sqlite3");
         let journal = root.join("settings-update.json");
         let mut store = Store::open(&path, false).unwrap();
@@ -576,14 +572,7 @@ mod tests {
     }
     #[test]
     fn failed_measurements_do_not_bias_offsets_and_exports_keep_event_timing() {
-        let folder = std::env::current_dir().unwrap().join("work").join(format!(
-            "native-store-{}-{}",
-            std::process::id(),
-            std::time::SystemTime::now()
-                .duration_since(std::time::UNIX_EPOCH)
-                .unwrap()
-                .as_nanos()
-        ));
+        let folder = crate::test_dir("native-store");
         let database = folder.join("history.sqlite3");
         let mut store = Store::open(&database, false).unwrap();
         let sample = Sample {
