@@ -122,10 +122,20 @@ fn filtered(p: &Peer, now: f64, limit: f64) -> Result<Candidate, String> {
         return Err(p.disabled.clone());
     }
     let latest = p.latest.as_ref().ok_or("No current response")?;
-    if latest.status != "valid" || p.reach == 0 {
+    // One lost or rejected reply is tolerated because the filter still holds
+    // the earlier samples. Two consecutive failures, or a kiss-o'-death,
+    // remove the source from selection.
+    if latest.status == "control" || p.reach & 0b11 == 0 {
         return Err(latest.reason.clone());
     }
-    if now - latest.mono > 3. * p.interval {
+    let newest = p.samples.back().ok_or_else(|| {
+        if latest.status == "valid" {
+            "Filter expired".to_string()
+        } else {
+            latest.reason.clone()
+        }
+    })?;
+    if now - newest.mono > 3. * p.interval {
         return Err("Latest response expired".into());
     }
     let mut samples: Vec<_> = p
@@ -441,6 +451,34 @@ mod tests {
         assert!(a.ready);
         assert!(a.offset_ms.unwrap() < 3.);
         assert!(!a.survivors.iter().any(|s| s.peer == p[3].server.key()));
+    }
+    fn failed(p: &mut Peer, mono: f64, status: &str) {
+        p.accept(Sample {
+            host: p.server.host.clone(),
+            address: p.server.host.clone(),
+            status: status.into(),
+            reason: "timed out".into(),
+            mono,
+            ..Default::default()
+        });
+    }
+    #[test]
+    fn one_lost_reply_does_not_remove_a_source() {
+        let (mut p, c) = peers(3);
+        failed(&mut p[0], 1012., "error");
+        let a = assess(&p, &c, 1013.);
+        assert!(a.ready, "{}", a.explanation);
+        assert_eq!(a.survivors.len(), 3);
+        failed(&mut p[0], 1076., "error");
+        let a = assess(&p, &c, 1077.);
+        assert!(!a.ready);
+        assert_eq!(a.reasons[&p[0].server.key()], "timed out");
+    }
+    #[test]
+    fn kiss_of_death_removes_a_source_at_once() {
+        let (mut p, c) = peers(3);
+        failed(&mut p[0], 1012., "control");
+        assert!(!assess(&p, &c, 1013.).ready);
     }
     #[test]
     fn nts_required_policy_rejects_unauthenticated_votes() {
