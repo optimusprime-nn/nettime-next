@@ -49,6 +49,7 @@ Filename: "{app}\NetTimeNextNative.exe"; Description: "Open NetTime Next"; Flags
 
 [Code]
 var UpgradingExisting: Boolean;
+var UpgradeFinished: Boolean;
 function PrepareToInstall(var NeedsRestart: Boolean): String;
 var ResultCode: Integer;
 begin
@@ -71,6 +72,7 @@ begin
     if UpgradingExisting then begin
       if (not Exec(ExpandConstant('{app}\NetTimeNextNativeService.exe'), '--finish-upgrade', '', SW_HIDE, ewWaitUntilTerminated, ResultCode)) or (ResultCode <> 0) then
         RaiseException('The upgraded collector could not resume. Settings and clock ownership remain saved; review admin-result.json.');
+      UpgradeFinished := True;
     end else if WizardIsTaskSelected('observer') then begin
       if (not Exec(ExpandConstant('{app}\NetTimeNextNativeService.exe'), '--install-service', '', SW_HIDE, ewWaitUntilTerminated, ResultCode)) or (ResultCode <> 0) then
         RaiseException('Native service registration failed.');
@@ -78,6 +80,13 @@ begin
         RaiseException('Native service startup failed. See ProgramData\NetTimeNextNativePreview\data\service-error.log.');
     end;
   end;
+end;
+procedure DeinitializeSetup();
+var ResultCode: Integer;
+begin
+  // Setup cancelled or failed after --prepare-upgrade: restart the collector it stopped.
+  if UpgradingExisting and (not UpgradeFinished) and FileExists(ExpandConstant('{tmp}\NetTimeNextNativeService.exe')) then
+    Exec(ExpandConstant('{tmp}\NetTimeNextNativeService.exe'), '--abort-upgrade', '', SW_HIDE, ewWaitUntilTerminated, ResultCode);
 end;
 function InitializeUninstall(): Boolean;
 var ResultCode: Integer;

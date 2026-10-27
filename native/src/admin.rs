@@ -60,6 +60,7 @@ pub fn dispatch(args: &[String]) -> Result<bool> {
             "--prepare-upgrade",
             "--finish-upgrade",
             "--secure-data-folder",
+            "--abort-upgrade",
         ]
         .contains(s)
     }) else {
@@ -79,7 +80,14 @@ pub fn dispatch(args: &[String]) -> Result<bool> {
         }
         return Ok(true);
     }
-    if !["--prepare-upgrade", "--finish-upgrade", "--rollback"].contains(&command) {
+    if ![
+        "--prepare-upgrade",
+        "--finish-upgrade",
+        "--abort-upgrade",
+        "--rollback",
+    ]
+    .contains(&command)
+    {
         ensure!(
             !crate::upgrade::pending()?,
             "A service upgrade is in progress; finish it before changing settings"
@@ -106,6 +114,7 @@ pub fn dispatch(args: &[String]) -> Result<bool> {
         "--remove-service" => service::action("remove").map(|_| ()),
         "--prepare-upgrade" => crate::upgrade::prepare(),
         "--finish-upgrade" => crate::upgrade::finish(),
+        "--abort-upgrade" => crate::upgrade::abort(),
         _ => unreachable!(),
     };
     let message = match &result {
