@@ -213,6 +213,14 @@ impl Store {
         tx.commit()?;
         Ok(())
     }
+    /// Re-enables sources a server stopped with a DENY/RSTR kiss-o'-death.
+    /// Applying settings is the operator review those sources wait for.
+    pub fn clear_disabled(&self) -> Result<usize> {
+        Ok(self.db.execute(
+            "UPDATE peer_state SET payload=json_set(payload,'$.disabled','') WHERE COALESCE(json_extract(payload,'$.disabled'),'')<>''",
+            [],
+        )?)
+    }
     pub fn states(&self) -> Result<Vec<(String, Value)>> {
         let mut q = self.db.prepare("SELECT peer,payload FROM peer_state")?;
         let rows = q.query_map([], |r| Ok((r.get::<_, String>(0)?, r.get::<_, String>(1)?)))?;
@@ -569,6 +577,22 @@ mod tests {
         assert_eq!(store.latest().unwrap(), Some(decision));
         let corrupt = payload_text(rusqlite::types::ValueRef::Blob(b"not gzip"));
         assert!(corrupt.is_err());
+    }
+    #[test]
+    fn clearing_disabled_sources_keeps_other_peer_state() {
+        let mut store = Store::open(Path::new(":memory:"), false).unwrap();
+        let states = [
+            (
+                "a:123".to_string(),
+                json!({"interval":64.,"disabled":"Server DENY"}),
+            ),
+            ("b:123".to_string(), json!({"interval":128.,"disabled":""})),
+        ];
+        store.save(1, &[], &json!({}), &states).unwrap();
+        assert_eq!(store.clear_disabled().unwrap(), 1);
+        let states: std::collections::HashMap<_, _> = store.states().unwrap().into_iter().collect();
+        assert_eq!(states["a:123"], json!({"interval":64.,"disabled":""}));
+        assert_eq!(states["b:123"]["interval"], 128.);
     }
     #[test]
     fn failed_measurements_do_not_bias_offsets_and_exports_keep_event_timing() {

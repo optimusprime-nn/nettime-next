@@ -13,6 +13,10 @@ pub struct Peer {
     pub next_due: f64,
     pub disabled: String,
     pub nts: crate::nts::NtsClient,
+    /// The configured poll interval that a RATE kiss-o'-death backs off from.
+    pub base_interval: f64,
+    /// Consecutive valid replies since the last RATE change.
+    calm: u8,
 }
 impl Peer {
     pub fn new(server: Server, interval: f64) -> Self {
@@ -25,6 +29,8 @@ impl Peer {
             next_due: 0.,
             disabled: String::new(),
             nts: Default::default(),
+            base_interval: interval,
+            calm: 0,
         }
     }
     pub fn accept(&mut self, s: Sample) {
@@ -36,6 +42,14 @@ impl Peer {
             self.samples.clear();
         }
         self.reach = (self.reach << 1) | u8::from(s.status == "valid");
+        if s.status == "valid" && self.interval > self.base_interval {
+            // Undo one RATE doubling after eight consecutive valid replies.
+            self.calm += 1;
+            if self.calm >= 8 {
+                self.interval = (self.interval / 2.).max(self.base_interval);
+                self.calm = 0;
+            }
+        }
         if s.status == "valid" {
             if self.samples.len() == 8 {
                 self.samples.pop_front();
@@ -45,6 +59,7 @@ impl Peer {
         if s.status == "control" {
             match s.kod.as_str() {
                 "RATE" => {
+                    self.calm = 0;
                     // Bounded by the longest configurable poll interval.
                     self.interval = (self.interval * 2.)
                         .max(2_f64.powi((s.poll as i32).clamp(6, 17)))
@@ -487,6 +502,30 @@ mod tests {
             });
         }
         assert_eq!(p[0].interval, 131072.);
+    }
+    #[test]
+    fn rate_backoff_unwinds_after_steady_replies() {
+        let (mut p, _) = peers(1);
+        let valid = p[0].samples[0].clone();
+        for _ in 0..2 {
+            p[0].accept(Sample {
+                status: "control".into(),
+                kod: "RATE".into(),
+                address: valid.address.clone(),
+                ..Default::default()
+            });
+        }
+        assert_eq!(p[0].interval, 256.);
+        for _ in 0..7 {
+            p[0].accept(valid.clone());
+        }
+        assert_eq!(p[0].interval, 256.);
+        p[0].accept(valid.clone());
+        assert_eq!(p[0].interval, 128.);
+        for _ in 0..16 {
+            p[0].accept(valid.clone());
+        }
+        assert_eq!(p[0].interval, 64.);
     }
     #[test]
     fn kiss_of_death_removes_a_source_at_once() {

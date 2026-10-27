@@ -211,6 +211,8 @@ pub fn apply(
             &root.join("settings.json"),
             &serde_json::to_vec_pretty(&next)?,
         )?;
+        // The collector is stopped, so its peer state can be changed safely.
+        Store::open(&root.join("data/history.sqlite3"), false)?.clear_disabled()?;
         if update.service.running {
             backend.change(service::NAME, true)?;
         }
