@@ -84,6 +84,15 @@ fn service_main(_args: Vec<OsString>) {
         if result.is_ok() { 0 } else { 1 },
     ));
 }
+/// Upgrades and repairs keep the administrator's start type (Manual or
+/// Disabled); only a new registration defaults to starting at boot.
+fn start_type(existing: &crate::ownership::Snapshot) -> ServiceStartType {
+    match (existing.exists, existing.start_type) {
+        (true, 3) => ServiceStartType::OnDemand,
+        (true, 4) => ServiceStartType::Disabled,
+        _ => ServiceStartType::AutoStart,
+    }
+}
 pub fn install() -> Result<()> {
     crate::windows::require_admin()?;
     anyhow::ensure!(
@@ -99,6 +108,10 @@ pub fn install() -> Result<()> {
             "Clock ownership conflict; service upgrade refused"
         );
     }
+    let existing = {
+        use crate::ownership::Services;
+        crate::ownership::WindowsServices.snapshot(NAME)?
+    };
     let manager = ServiceManager::local_computer(
         None::<&str>,
         ServiceManagerAccess::CONNECT | ServiceManagerAccess::CREATE_SERVICE,
@@ -107,7 +120,7 @@ pub fn install() -> Result<()> {
         name: NAME.into(),
         display_name: "NetTime Next".into(),
         service_type: ServiceType::OWN_PROCESS,
-        start_type: ServiceStartType::AutoStart,
+        start_type: start_type(&existing),
         error_control: ServiceErrorControl::Normal,
         executable_path: std::env::current_exe()?.with_file_name("NetTimeNextNativeService.exe"),
         launch_arguments: vec!["--service".into()],
@@ -199,4 +212,23 @@ pub fn action(command: &str) -> Result<String> {
         _ => {}
     }
     Ok(format!("{:?}", service.query_status()?.current_state))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    #[test]
+    fn reinstall_keeps_the_existing_start_type() {
+        let snapshot = |exists, start_type| crate::ownership::Snapshot {
+            name: NAME.into(),
+            exists,
+            start_type,
+            account: String::new(),
+            running: false,
+        };
+        assert_eq!(start_type(&snapshot(false, 0)), ServiceStartType::AutoStart);
+        assert_eq!(start_type(&snapshot(true, 2)), ServiceStartType::AutoStart);
+        assert_eq!(start_type(&snapshot(true, 3)), ServiceStartType::OnDemand);
+        assert_eq!(start_type(&snapshot(true, 4)), ServiceStartType::Disabled);
+    }
 }
