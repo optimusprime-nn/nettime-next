@@ -312,6 +312,7 @@ mod tests {
             previous_config: b"original takeover snapshot".to_vec(),
             privilege_preexisting: false,
             clock_started: true,
+            pending_stop: vec![],
         };
         atomic_write(
             &root.join("clock-ownership.json"),

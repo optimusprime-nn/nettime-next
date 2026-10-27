@@ -23,6 +23,9 @@ pub fn pending() -> Result<bool> {
 pub fn prepare() -> Result<()> {
     let root = service::root();
     crate::settings_update::recover(&root, &mut WindowsServices)?;
+    // Journals from older versions lack newer controllers; record and stop
+    // them before the guard below requires them stopped.
+    ownership::migrate(&root, &mut WindowsServices)?;
     if pending()? {
         let state: Upgrade =
             serde_json::from_slice(&std::fs::read(root.join("upgrade-state.json"))?)?;

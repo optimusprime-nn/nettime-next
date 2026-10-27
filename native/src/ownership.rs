@@ -294,6 +294,9 @@ pub struct Journal {
     pub previous_config: Vec<u8>,
     pub privilege_preexisting: bool,
     pub clock_started: bool,
+    /// Controllers recorded by `migrate` whose stop/disable has not completed.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub pending_stop: Vec<String>,
 }
 pub fn journal(root: &Path) -> Result<Option<Journal>> {
     let path = root.join("clock-ownership.json");
@@ -310,6 +313,52 @@ fn save(root: &Path, journal: &Journal) -> Result<()> {
 }
 pub fn active(root: &Path) -> Result<bool> {
     Ok(journal(root)?.is_some_and(|j| j.phase == "active"))
+}
+/// Brings an active journal written by an older version up to the current
+/// CONTROLLERS (1.0.1 did not control vmictimesync). Each missing controller's
+/// original state is saved durably before it is stopped and disabled, so a
+/// later rollback restores it; a retry after a partial failure completes the
+/// pending stops. Controllers already in the journal are never touched here:
+/// one running again is a conflict for `guard` to report.
+pub fn migrate(root: &Path, backend: &mut impl Services) -> Result<()> {
+    let Some(mut j) = journal(root)? else {
+        return Ok(());
+    };
+    if j.phase != "active" {
+        return Ok(());
+    }
+    let missing: Vec<_> = CONTROLLERS
+        .into_iter()
+        .filter(|name| {
+            !j.controllers
+                .iter()
+                .any(|s| s.name.eq_ignore_ascii_case(name))
+        })
+        .collect();
+    if missing.is_empty() && j.pending_stop.is_empty() {
+        return Ok(());
+    }
+    for name in &missing {
+        let original = backend.snapshot(name)?;
+        if original.exists {
+            j.pending_stop.push(original.name.clone());
+        }
+        j.controllers.push(original);
+    }
+    save(root, &j)?;
+    for name in j.pending_stop.clone() {
+        backend.change(&name, false)?;
+        backend.configure(&name, Some(4), None)?;
+        j.pending_stop.retain(|n| n != &name);
+        save(root, &j)?;
+    }
+    if !missing.is_empty() {
+        Store::open(&root.join("data/history.sqlite3"), false)?.event(
+            "takeover_migrated",
+            &json!({"added":j.controllers.iter().filter(|s| missing.contains(&s.name.as_str())).collect::<Vec<_>>()}),
+        )?;
+    }
+    Ok(())
 }
 pub fn guard(root: &Path, backend: &mut impl Services) -> Result<bool> {
     if !active(root)? {
@@ -392,6 +441,7 @@ pub fn activate(root: &Path, backend: &mut impl Services) -> Result<()> {
         previous_config: std::fs::read(root.join("settings.json"))?,
         privilege_preexisting: backend.privilege(None)?,
         clock_started: false,
+        pending_stop: vec![],
     };
     save(root, &j)?;
     drop(store);
@@ -680,6 +730,66 @@ mod tests {
         activate(&fixture.root, &mut backend).unwrap();
         rollback(&fixture.root, &mut backend).unwrap();
         assert!(backend.privilege);
+    }
+    /// An owner activated by 1.0.1, whose journal has no vmictimesync entry.
+    fn legacy_owner(hyperv_running: bool) -> (Fixture, Fake, BTreeMap<String, Snapshot>) {
+        let fixture = Fixture::new();
+        let mut backend = Fake::new();
+        backend.states.get_mut("vmictimesync").unwrap().running = hyperv_running;
+        let original = backend.states.clone();
+        activate(&fixture.root, &mut backend).unwrap();
+        let mut j = journal(&fixture.root).unwrap().unwrap();
+        j.controllers.retain(|s| s.name != "vmictimesync");
+        save(&fixture.root, &j).unwrap();
+        backend
+            .states
+            .insert("vmictimesync".into(), original["vmictimesync"].clone());
+        (fixture, backend, original)
+    }
+    #[test]
+    fn legacy_journal_migrates_hyperv_and_rollback_restores_it() {
+        for running in [true, false] {
+            let (fixture, mut backend, original) = legacy_owner(running);
+            assert_eq!(guard(&fixture.root, &mut backend).unwrap(), !running);
+            migrate(&fixture.root, &mut backend).unwrap();
+            assert!(guard(&fixture.root, &mut backend).unwrap());
+            let hyperv = &backend.states["vmictimesync"];
+            assert!(!hyperv.running);
+            assert_eq!(hyperv.start_type, 4);
+            let j = journal(&fixture.root).unwrap().unwrap();
+            assert!(j.pending_stop.is_empty());
+            assert_eq!(j.controllers.len(), CONTROLLERS.len());
+            migrate(&fixture.root, &mut backend).unwrap();
+            rollback(&fixture.root, &mut backend).unwrap();
+            assert_restored(&fixture, &backend, &original);
+        }
+    }
+    #[test]
+    fn interrupted_migration_completes_on_retry_and_keeps_rollback_state() {
+        for step in 0..2 {
+            let (fixture, mut backend, original) = legacy_owner(true);
+            backend.fail_at = Some(backend.changes + step);
+            assert!(migrate(&fixture.root, &mut backend).is_err());
+            let j = journal(&fixture.root).unwrap().unwrap();
+            assert_eq!(j.pending_stop, ["vmictimesync"]);
+            assert_eq!(
+                serde_json::to_value(j.controllers.last().unwrap()).unwrap(),
+                serde_json::to_value(&original["vmictimesync"]).unwrap()
+            );
+            assert!(!guard(&fixture.root, &mut backend).unwrap() || step == 1);
+            migrate(&fixture.root, &mut backend).unwrap();
+            assert!(guard(&fixture.root, &mut backend).unwrap());
+            rollback(&fixture.root, &mut backend).unwrap();
+            assert_restored(&fixture, &backend, &original);
+        }
+    }
+    #[test]
+    fn migration_does_not_mask_a_restarted_legacy_controller() {
+        let (fixture, mut backend, _) = legacy_owner(false);
+        backend.states.get_mut("W32Time").unwrap().running = true;
+        migrate(&fixture.root, &mut backend).unwrap();
+        assert!(backend.states["W32Time"].running);
+        assert!(!guard(&fixture.root, &mut backend).unwrap());
     }
     #[test]
     fn bad_evidence_never_changes_services() {
