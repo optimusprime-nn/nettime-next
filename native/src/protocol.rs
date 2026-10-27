@@ -134,10 +134,9 @@ pub fn parse(raw: &[u8], stamp: &[u8], s: &mut Sample) -> Result<()> {
         "Local clock changed during exchange"
     );
     let delay = (s.t4 - s.t1) - (s.t3 - s.t2);
-    ensure!(
-        delay >= -0.001_f64.max(2_f64.powi((s.precision as i32).clamp(-32, 0))),
-        "Impossible negative round-trip delay"
-    );
+    // A fixed 1 ms allowance for timestamp rounding. The server's self-reported
+    // precision (up to 1 s) must not widen what counts as a possible delay.
+    ensure!(delay >= -0.001, "Impossible negative round-trip delay");
     s.delay_ms = (delay * 1000.).max(0.);
     s.offset_ms = ((s.t2 - s.t1) + (s.t3 - s.t4)) * 500.;
     s.status = "valid".into();
@@ -296,6 +295,31 @@ mod tests {
         for t in [0., 1730000000.125, 2085978497.5, 4100000000.25] {
             assert!((decode(&encode(t), t) - t).abs() < 0.000001)
         }
+    }
+    fn reply_with_delay(delay: f64, precision: i8) -> Result<()> {
+        let at = 1_800_000_000.;
+        let stamp = encode(at);
+        let mut raw = [0u8; 48];
+        raw[0] = 0x24;
+        raw[1] = 2;
+        raw[3] = precision as u8;
+        raw[16..24].copy_from_slice(&encode(at - 1.));
+        raw[24..32].copy_from_slice(&stamp);
+        raw[32..40].copy_from_slice(&encode(at));
+        raw[40..48].copy_from_slice(&encode(at));
+        let mut s = Sample {
+            t1: at,
+            t4: at + delay,
+            ..Default::default()
+        };
+        parse(&raw, &stamp, &mut s)
+    }
+    #[test]
+    fn coarse_server_precision_does_not_allow_large_negative_delay() {
+        assert!(reply_with_delay(-0.5, 0).is_err());
+        assert!(reply_with_delay(-0.01, -6).is_err());
+        reply_with_delay(-0.0005, 0).unwrap();
+        reply_with_delay(0.02, -20).unwrap();
     }
     #[test]
     fn replay_and_unsynchronized_rejected() {
