@@ -258,8 +258,7 @@ fn intersection(c: &[Candidate]) -> Option<(f64, f64, usize)> {
 }
 pub fn assess(peers: &[Peer], cfg: &Config, now: f64) -> Assessment {
     let mut a = Assessment::default();
-    let mut endpoints = HashSet::new();
-    let mut groups = HashSet::new();
+    let mut qualified = vec![];
     for p in peers {
         let key = p.server.key();
         match filtered(p, now, cfg.max_distance_ms) {
@@ -267,27 +266,43 @@ pub fn assess(peers: &[Peer], cfg: &Config, now: f64) -> Assessment {
                 a.reasons.insert(key, reason);
             }
             Ok(c) => {
-                let endpoint = (c.address.clone(), c.port);
-                let reason = if endpoints.contains(&endpoint) {
-                    "Same resolved endpoint; no additional vote"
-                } else if c.source_group.is_empty() {
+                let reason = if c.source_group.is_empty() {
                     "Assign independent source group"
-                } else if groups.contains(&c.source_group) {
-                    "Same source group; measured but no additional vote"
                 } else if c.samples < 4 {
                     "Filter warming: need four fresh measurements"
                 } else if cfg.clock.require_nts && c.authentication != "authenticated" {
                     "Clock policy requires NTS"
                 } else {
-                    "Filtered candidate"
+                    qualified.push(c);
+                    continue;
                 };
                 a.reasons.insert(key, reason.into());
-                if reason == "Filtered candidate" {
-                    endpoints.insert(endpoint);
-                    groups.insert(c.source_group.clone());
-                    a.candidates.push(c);
-                }
             }
+        }
+    }
+    // Each group and endpoint votes once, through its best (lowest distance)
+    // source, not whichever one comes first in the configuration.
+    qualified.sort_by(|x, y| {
+        x.distance_ms
+            .total_cmp(&y.distance_ms)
+            .then(x.peer.cmp(&y.peer))
+    });
+    let mut endpoints = HashSet::new();
+    let mut groups = HashSet::new();
+    for c in qualified {
+        let endpoint = (c.address.clone(), c.port);
+        let reason = if endpoints.contains(&endpoint) {
+            "Same resolved endpoint; no additional vote"
+        } else if groups.contains(&c.source_group) {
+            "Same source group; measured but no additional vote"
+        } else {
+            "Filtered candidate"
+        };
+        a.reasons.insert(c.peer.clone(), reason.into());
+        if reason == "Filtered candidate" {
+            endpoints.insert(endpoint);
+            groups.insert(c.source_group.clone());
+            a.candidates.push(c);
         }
     }
     if a.candidates.len() < cfg.clock.min_sources {
@@ -450,6 +465,28 @@ mod tests {
         p[2].server.source_group = "group1".into();
         c.servers[2].source_group = "group1".into();
         assert!(!assess(&p, &c, 949.).ready);
+    }
+    #[test]
+    fn group_votes_through_its_best_source_not_the_first_configured() {
+        let (mut p, mut c) = peers(4);
+        // Peers 0 and 3 share a group; peer 3 is far more precise.
+        p[3].server.source_group = "group0".into();
+        c.servers[3].source_group = "group0".into();
+        for s in &mut p[0].samples {
+            s.delay_ms = 200.;
+        }
+        let a = assess(&p, &c, 949.);
+        assert!(a.ready, "{}", a.explanation);
+        assert!(a.candidates.iter().any(|x| x.peer == p[3].server.key()));
+        assert!(!a.candidates.iter().any(|x| x.peer == p[0].server.key()));
+        assert_eq!(
+            a.reasons[&p[0].server.key()],
+            "Same source group; measured but no additional vote"
+        );
+        // A warming source does not claim the group either.
+        p[3].samples.truncate(2);
+        let a = assess(&p, &c, 949.);
+        assert!(a.candidates.iter().any(|x| x.peer == p[0].server.key()));
     }
     #[test]
     fn stale_or_unfilled_filters_cannot_control() {
