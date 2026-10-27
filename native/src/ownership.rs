@@ -23,7 +23,10 @@ use windows_sys::Win32::{
     System::Services::{ChangeServiceConfigW, SERVICE_NO_CHANGE},
 };
 
-pub const CONTROLLERS: [&str; 3] = ["NetTimeSvc", "W32Time", "NetTimeNext"];
+/// Other clock writers that takeover stops and disables, and rollback restores.
+/// vmictimesync is the Hyper-V guest time synchronization service; on a
+/// Hyper-V VM it would keep correcting the clock alongside this service.
+pub const CONTROLLERS: [&str; 4] = ["NetTimeSvc", "W32Time", "NetTimeNext", "vmictimesync"];
 pub fn account() -> String {
     format!("NT SERVICE\\{}", service::NAME)
 }
@@ -499,6 +502,7 @@ mod tests {
                 ("NetTimeSvc", 2, true),
                 ("W32Time", 3, false),
                 ("NetTimeNext", 2, true),
+                ("vmictimesync", 3, true),
             ] {
                 states.insert(
                     name.into(),
@@ -630,7 +634,14 @@ mod tests {
     }
     #[test]
     fn every_activation_mutation_failure_restores_exact_states_and_config() {
-        for fail_at in 0..10 {
+        let mutations = {
+            let fixture = Fixture::new();
+            let mut backend = Fake::new();
+            activate(&fixture.root, &mut backend).unwrap();
+            backend.changes
+        };
+        assert!(mutations >= 10);
+        for fail_at in 0..mutations {
             let fixture = Fixture::new();
             let mut backend = Fake::new();
             let original = backend.states.clone();
@@ -649,6 +660,12 @@ mod tests {
         let original = backend.states.clone();
         activate(&fixture.root, &mut backend).unwrap();
         assert!(guard(&fixture.root, &mut backend).unwrap());
+        let hyperv = &backend.states["vmictimesync"];
+        assert!(!hyperv.running);
+        assert_eq!(hyperv.start_type, 4);
+        backend.states.get_mut("vmictimesync").unwrap().running = true;
+        assert!(!guard(&fixture.root, &mut backend).unwrap());
+        backend.states.get_mut("vmictimesync").unwrap().running = false;
         backend.fail_at = Some(backend.changes + 1);
         assert!(rollback(&fixture.root, &mut backend).is_err());
         assert_eq!(
