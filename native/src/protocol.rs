@@ -1,5 +1,5 @@
 use crate::{config::Server, nts::NtsClient};
-use anyhow::{Result, ensure};
+use anyhow::{Result, bail, ensure};
 use serde::{Deserialize, Serialize};
 use std::{
     net::{ToSocketAddrs, UdpSocket},
@@ -217,30 +217,66 @@ pub fn query(server: &Server, timeout: f64, poll: f64, client: &mut NtsClient) -
         };
         socket.send(&request)?;
         let mut buffer = [0u8; 65536];
-        let size = socket.recv(&mut buffer)?;
-        s.t4 = utc();
-        s.exchange_ms = (mono() - start) * 1000.;
-        s.clock_step_ms = (s.t4 - s.t1) * 1000. - s.exchange_ms;
-        s.utc = s.t4;
-        s.mono = mono();
-        s.reply_hex = hex::encode(&buffer[..size.min(48)]);
-        if secure {
-            let n = client.session.as_mut().unwrap();
-            n.verify(&buffer[..size], &uid, cookie_limit)?;
-            s.authentication_status = "authenticated".into();
-            s.nts_ke_host = server.host.clone();
-            s.nts_ke_port = server.nts_ke_port;
-            s.tls_version = "TLSv1.3".into();
-            s.nts_session_age_seconds = mono() - n.established;
-            s.nts_cookie_count = n.cookies.len();
-            s.certificate_sha256 = n.fingerprint.clone();
-            ensure!(size >= 48, "Truncated authenticated NTP header");
-            parse(&buffer[..48], &stamp, &mut s)?;
-            client.exchange_succeeded();
-        } else {
-            parse(&buffer[..size], &stamp, &mut s)?;
+        // A datagram that is not this request's reply (wrong originate
+        // timestamp, or failed NTS authentication) is discarded and the wait
+        // continues, so a stray or spoofed packet cannot fail the poll.
+        let mut discarded = 0;
+        let mut last_discard = String::new();
+        let unmatched = |discarded: usize, last: &str| {
+            anyhow::anyhow!("No matching reply; discarded {discarded} datagrams ({last})")
+        };
+        loop {
+            let remaining = timeout - (mono() - start);
+            if remaining <= 0. {
+                return Err(unmatched(discarded, &last_discard));
+            }
+            socket.set_read_timeout(Some(Duration::from_secs_f64(remaining.max(0.001))))?;
+            let size = match socket.recv(&mut buffer) {
+                Ok(size) => size,
+                Err(e)
+                    if discarded > 0
+                        && matches!(
+                            e.kind(),
+                            std::io::ErrorKind::WouldBlock | std::io::ErrorKind::TimedOut
+                        ) =>
+                {
+                    return Err(unmatched(discarded, &last_discard));
+                }
+                Err(e) => bail!(e),
+            };
+            s.t4 = utc();
+            s.exchange_ms = (mono() - start) * 1000.;
+            s.clock_step_ms = (s.t4 - s.t1) * 1000. - s.exchange_ms;
+            s.utc = s.t4;
+            s.mono = mono();
+            s.reply_hex = hex::encode(&buffer[..size.min(48)]);
+            if secure {
+                let n = client.session.as_mut().unwrap();
+                if let Err(e) = n.verify(&buffer[..size], &uid, cookie_limit) {
+                    discarded += 1;
+                    last_discard = e.to_string();
+                    continue;
+                }
+                s.authentication_status = "authenticated".into();
+                s.nts_ke_host = server.host.clone();
+                s.nts_ke_port = server.nts_ke_port;
+                s.tls_version = "TLSv1.3".into();
+                s.nts_session_age_seconds = mono() - n.established;
+                s.nts_cookie_count = n.cookies.len();
+                s.certificate_sha256 = n.fingerprint.clone();
+                ensure!(size >= 48, "Truncated authenticated NTP header");
+                parse(&buffer[..48], &stamp, &mut s)?;
+                client.exchange_succeeded();
+            } else {
+                if size < 32 || buffer[24..32] != stamp {
+                    discarded += 1;
+                    last_discard = "Originate mismatch".into();
+                    continue;
+                }
+                parse(&buffer[..size], &stamp, &mut s)?;
+            }
+            return Ok(());
         }
-        Ok(())
     })();
     if let Err(e) = result {
         s.reason = e.to_string();
@@ -315,6 +351,62 @@ mod tests {
         query(&server, 2., 64., &mut client);
         assert_eq!(client.failures, 30);
         assert!(client.retry_at - mono() <= crate::nts::MAX_BACKOFF);
+    }
+    /// A loopback NTP server that first sends `junk` stray datagrams, then a
+    /// valid reply if `answer` is set.
+    fn stray_then_reply(junk: usize, answer: bool) -> Server {
+        let socket = UdpSocket::bind("127.0.0.1:0").unwrap();
+        let port = socket.local_addr().unwrap().port();
+        std::thread::spawn(move || {
+            let mut request = [0u8; 1024];
+            let (_, client) = socket.recv_from(&mut request).unwrap();
+            let now = encode(utc());
+            let mut reply = [0u8; 48];
+            reply[0] = 0x24;
+            reply[1] = 2;
+            reply[16..24].copy_from_slice(&encode(utc() - 1.));
+            reply[32..40].copy_from_slice(&now);
+            reply[40..48].copy_from_slice(&now);
+            for _ in 0..junk {
+                socket.send_to(&reply, client).unwrap();
+            }
+            if answer {
+                reply[24..32].copy_from_slice(&request[40..48]);
+                socket.send_to(&reply, client).unwrap();
+            }
+        });
+        Server {
+            host: "127.0.0.1".into(),
+            port,
+            ..Default::default()
+        }
+    }
+    #[test]
+    fn stray_datagrams_are_discarded_not_fatal() {
+        let sample = query(
+            &stray_then_reply(2, true),
+            2.,
+            64.,
+            &mut NtsClient::default(),
+        );
+        assert_eq!(sample.status, "valid", "{}", sample.reason);
+        assert_eq!(sample.stratum, 2);
+    }
+    #[test]
+    fn only_stray_datagrams_time_out_with_their_reason() {
+        let sample = query(
+            &stray_then_reply(1, false),
+            0.3,
+            64.,
+            &mut NtsClient::default(),
+        );
+        assert_eq!(sample.status, "error");
+        assert!(sample.reason.contains("discarded 1"), "{}", sample.reason);
+        assert!(
+            sample.reason.contains("Originate mismatch"),
+            "{}",
+            sample.reason
+        );
     }
     #[test]
     fn lost_nts_reply_keeps_session_until_repeated() {
