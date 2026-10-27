@@ -301,14 +301,26 @@ impl Store {
         {
             for journal in ["settings-update.json", "upgrade-state.json"] {
                 let path = root.join(journal);
-                if path.exists() {
-                    let state: Value = serde_json::from_slice(&std::fs::read(path)?)?;
-                    if state["phase"] == "prepared" {
-                        return Ok(
-                            serde_json::json!({"deferred":true,"reason":"Administrator transaction has not committed"}),
-                        );
-                    }
+                if !path.exists() {
+                    continue;
                 }
+                // An unreadable journal is treated like an uncommitted one: never
+                // purge on its account, and report it instead of failing each pass.
+                let reason = match std::fs::read(&path)
+                    .map_err(anyhow::Error::from)
+                    .and_then(|bytes| Ok(serde_json::from_slice::<Value>(&bytes)?))
+                {
+                    Ok(state) if state["phase"] == "prepared" => {
+                        "Administrator transaction has not committed".to_string()
+                    }
+                    Ok(_) => continue,
+                    Err(e) => format!("{journal} is unreadable: {e:#}"),
+                };
+                // Compression is lossless, so it still runs; purging waits.
+                let compressed = self.compress_before(utc() - 86400.)?;
+                return Ok(
+                    serde_json::json!({"deferred":true,"reason":reason,"compressed_records":compressed}),
+                );
             }
         }
         self.prune(days)?;
@@ -436,6 +448,31 @@ mod tests {
         std::fs::remove_file(journal).unwrap();
         std::fs::remove_dir(root.join("data")).unwrap();
         std::fs::remove_dir(root).unwrap();
+    }
+    #[test]
+    fn malformed_journal_defers_purging_but_still_compresses() {
+        let root = crate::test_dir("malformed-journal");
+        let path = root.join("data/history.sqlite3");
+        let mut store = Store::open(&path, false).unwrap();
+        store
+            .db
+            .execute(
+                "INSERT INTO events(utc,kind,payload)VALUES(?,'old','{}')",
+                [utc() - 30. * 86400.],
+            )
+            .unwrap();
+        std::fs::write(root.join("upgrade-state.json"), b"{not json").unwrap();
+        let result = store.maintain(5.).unwrap();
+        assert_eq!(result["deferred"], true);
+        assert!(result["reason"].as_str().unwrap().contains("unreadable"));
+        assert_eq!(result["compressed_records"], 1);
+        let count: i64 = store
+            .db
+            .query_row("SELECT count(*) FROM events", [], |r| r.get(0))
+            .unwrap();
+        assert_eq!(count, 1);
+        drop(store);
+        std::fs::remove_dir_all(root).unwrap();
     }
     #[test]
     fn logging_off_keeps_live_status_and_restart_cycle_without_growing_history() {

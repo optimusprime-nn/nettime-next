@@ -27,6 +27,7 @@ pub struct Monitor {
     instance: String,
     maintenance: Option<thread::JoinHandle<Result<Value>>>,
     last_clock_event: String,
+    last_maintenance_problem: String,
     // Cycles (with their own decisions) and events held back while another
     // connection keeps the database locked.
     unsaved: std::collections::VecDeque<(i64, Vec<Sample>, Value)>,
@@ -83,6 +84,7 @@ impl Monitor {
             instance: String::new(),
             maintenance: None,
             last_clock_event: String::new(),
+            last_maintenance_problem: String::new(),
             unsaved: Default::default(),
             events: Vec::new(),
             blocked_since: None,
@@ -133,14 +135,7 @@ impl Monitor {
                 }
                 Err(_) => json!({"error":"History maintenance worker ended unexpectedly"}),
             };
-            if value["deferred"] == true {
-                self.next_prune = now + 5.;
-            } else {
-                if value.get("error").is_some() {
-                    self.next_prune = now + 60.;
-                }
-                self.record("history_maintenance", value);
-            }
+            self.maintenance_finished(value, now);
         }
         if now >= self.next_prune && self.maintenance.is_none() {
             if let Some(path) = self.store.db.path().map(std::path::PathBuf::from) {
@@ -230,6 +225,22 @@ impl Monitor {
         let states=self.peers.iter().map(|p|(p.server.key(),json!({"interval":p.interval,"disabled":p.disabled,"reach":p.reach,"next_utc":utc()+(p.next_due-mono()).max(0.),"nts_failures":p.nts.failures,"nts_retry_utc":utc()+(p.nts.retry_at-mono()).max(0.)}))).collect::<Vec<_>>();
         self.persist(samples, &decision, &states)?;
         Ok(Some(decision))
+    }
+    /// Schedules the next pass and logs the outcome. A deferral or error that
+    /// repeats unchanged is logged once, not on every retry.
+    fn maintenance_finished(&mut self, value: Value, now: f64) {
+        let problem = value
+            .get("error")
+            .or(value.get("reason"))
+            .map(Value::to_string);
+        if problem.is_some() {
+            self.next_prune = now + 60.;
+        }
+        let signature = problem.unwrap_or_default();
+        if signature.is_empty() || signature != self.last_maintenance_problem {
+            self.record("history_maintenance", value);
+        }
+        self.last_maintenance_problem = signature;
     }
     /// Queues an event; it is written with the next measurement save.
     fn record(&mut self, kind: &str, value: Value) {
@@ -383,6 +394,27 @@ mod tests {
         assert!(monitor.events[0].2.get("lost_cycles").is_none());
         drop((reader, monitor));
         std::fs::remove_dir_all(root).unwrap();
+    }
+    #[test]
+    fn repeated_maintenance_problems_are_logged_once() {
+        let store = Store::open(std::path::Path::new(":memory:"), false).unwrap();
+        let mut monitor = Monitor::new(Config::default(), store).unwrap();
+        let deferred =
+            json!({"deferred":true,"reason":"Administrator transaction has not committed"});
+        for _ in 0..5 {
+            monitor.maintenance_finished(deferred.clone(), 100.);
+        }
+        assert_eq!(monitor.next_prune, 160.);
+        monitor.maintenance_finished(json!({"error":"disk full"}), 200.);
+        monitor.maintenance_finished(json!({"error":"disk full"}), 260.);
+        monitor.maintenance_finished(json!({"compressed_records":3}), 320.);
+        monitor.maintenance_finished(json!({"compressed_records":0}), 380.);
+        monitor.maintenance_finished(deferred.clone(), 440.);
+        let kinds: Vec<_> = monitor.events.iter().map(|e| e.2.clone()).collect();
+        assert_eq!(kinds.len(), 5, "{kinds:?}");
+        assert_eq!(kinds[0], deferred);
+        assert_eq!(kinds[1]["error"], "disk full");
+        assert_eq!(kinds[4], deferred);
     }
     #[test]
     fn full_deferral_queue_reports_the_lost_interval() {
