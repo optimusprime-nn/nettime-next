@@ -1,8 +1,9 @@
 use crate::{
     config::Config,
+    protocol::Sample,
     protocol::{self, mono, utc},
     selection::{self, Peer},
-    storage::Store,
+    storage::{self, Store},
 };
 use anyhow::{Result, ensure};
 use serde_json::{Value, json};
@@ -26,7 +27,14 @@ pub struct Monitor {
     instance: String,
     maintenance: Option<thread::JoinHandle<Result<Value>>>,
     last_clock_event: String,
+    // Writes held back while another connection keeps the database locked.
+    unsaved: Vec<Sample>,
+    events: Vec<(f64, String, Value)>,
+    blocked_since: Option<f64>,
 }
+/// Bounds on what is held in memory while the database stays locked.
+const MAX_UNSAVED_SAMPLES: usize = 4096;
+const MAX_UNSAVED_EVENTS: usize = 1024;
 impl Monitor {
     pub fn new(cfg: Config, mut store: Store) -> Result<Self> {
         // The migration observer must never become a second system clock writer.
@@ -70,6 +78,9 @@ impl Monitor {
             instance: String::new(),
             maintenance: None,
             last_clock_event: String::new(),
+            unsaved: Vec::new(),
+            events: Vec::new(),
+            blocked_since: None,
         })
     }
     pub fn for_service(cfg: Config, store: Store, root: &std::path::Path) -> Result<Self> {
@@ -89,10 +100,10 @@ impl Monitor {
         )?;
         if options.mode == "slew" {
             monitor.clock = Some(crate::clock::Session::start(root, options)?);
-            monitor.store.event(
+            monitor.record(
                 "clock_controller_started",
-                &json!({"mode":"slew","limits":cfg.clock}),
-            )?;
+                json!({"mode":"slew","limits":cfg.clock}),
+            );
         }
         monitor.cfg = cfg;
         Ok(monitor)
@@ -121,7 +132,7 @@ impl Monitor {
                 if value.get("error").is_some() {
                     self.next_prune = now + 60.;
                 }
-                self.store.event("history_maintenance", &value)?;
+                self.record("history_maintenance", value);
             }
         }
         if now >= self.next_prune && self.maintenance.is_none() {
@@ -136,10 +147,10 @@ impl Monitor {
         let wall = utc();
         let step = (wall - self.last_wall) - (now - self.last_mono);
         if step.abs() > 0.05 {
-            self.store.event(
+            self.record(
                 "local_clock_discontinuity",
-                &json!({"step_ms":step*1000.,"action":"Cleared sample filters"}),
-            )?;
+                json!({"step_ms":step*1000.,"action":"Cleared sample filters"}),
+            );
             for p in &mut self.peers {
                 p.samples.clear()
             }
@@ -185,7 +196,7 @@ impl Monitor {
                 if self.cfg.diagnostic_logging {
                     evidence["assessment"] = serde_json::to_value(&assessment)?;
                 }
-                self.store.event("clock_correction", &evidence)?;
+                self.record("clock_correction", evidence);
                 self.last_clock_event = signature;
             }
             action
@@ -210,20 +221,119 @@ impl Monitor {
         }
         let decision = json!({"utc":utc(),"collector_instance":self.instance,"policy":"native-service-v2","selected":assessment.selected,"confidence":"Source agreement; independence depends on configured groups","explanation":assessment.explanation,"synchronization":assessment,"servers":servers,"clock_action":clock_action});
         let states=self.peers.iter().map(|p|(p.server.key(),json!({"interval":p.interval,"disabled":p.disabled,"reach":p.reach,"next_utc":utc()+(p.next_due-mono()).max(0.),"nts_failures":p.nts.failures,"nts_retry_utc":utc()+(p.nts.retry_at-mono()).max(0.)}))).collect::<Vec<_>>();
-        self.store.save(self.cycle, &samples, &decision, &states)?;
-        self.cycle += 1;
+        self.persist(samples, &decision, &states)?;
         Ok(Some(decision))
     }
+    /// Queues an event; it is written with the next measurement save.
+    fn record(&mut self, kind: &str, value: Value) {
+        if self.events.len() == MAX_UNSAVED_EVENTS {
+            self.events.remove(0);
+        }
+        self.events.push((utc(), kind.into(), value));
+    }
+    fn flush_events(&mut self) -> Result<()> {
+        while let Some((at, kind, value)) = self.events.first() {
+            self.store.event_at(*at, kind, value)?;
+            self.events.remove(0);
+        }
+        Ok(())
+    }
+    /// Writes queued events and measurements. A reader holding the database past
+    /// the busy timeout defers the write to the next cycle instead of stopping
+    /// the service; clock correction does not depend on history.
+    fn persist(
+        &mut self,
+        samples: Vec<Sample>,
+        decision: &Value,
+        states: &[(String, Value)],
+    ) -> Result<()> {
+        self.unsaved.extend(samples);
+        let excess = self.unsaved.len().saturating_sub(MAX_UNSAVED_SAMPLES);
+        self.unsaved.drain(..excess);
+        let result = self
+            .flush_events()
+            .and_then(|()| self.store.save(self.cycle, &self.unsaved, decision, states));
+        match result {
+            Ok(()) => {
+                self.unsaved.clear();
+                self.cycle += 1;
+                if let Some(since) = self.blocked_since.take() {
+                    self.record(
+                        "history_write_resumed",
+                        json!({"blocked_seconds":utc()-since,"reason":"Another program held the history database locked"}),
+                    );
+                }
+                Ok(())
+            }
+            Err(e) if storage::is_busy(&e) => {
+                self.blocked_since.get_or_insert_with(utc);
+                Ok(())
+            }
+            Err(e) => Err(e),
+        }
+    }
     pub fn run(&mut self, stop: Arc<AtomicBool>) -> Result<()> {
-        self.store.event(
+        let mode = self.cfg.clock.mode.clone();
+        self.record(
             "native_collector_started",
-            &json!({"version":env!("CARGO_PKG_VERSION"),"mode":self.cfg.clock.mode}),
-        )?;
+            json!({"version":env!("CARGO_PKG_VERSION"),"mode":mode}),
+        );
         while !stop.load(Ordering::Relaxed) {
             self.collect()?;
             thread::sleep(Duration::from_millis(250));
         }
-        self.store.event("native_collector_stopped", &json!({}))?;
-        Ok(())
+        self.record("native_collector_stopped", json!({}));
+        match self.flush_events() {
+            Err(e) if !storage::is_busy(&e) => Err(e),
+            _ => Ok(()),
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    #[test]
+    fn locked_database_defers_history_instead_of_failing() {
+        let root = std::env::current_dir().unwrap().join("work").join(format!(
+            "locked-history-{}-{}",
+            std::process::id(),
+            utc().to_bits()
+        ));
+        let path = root.join("history.sqlite3");
+        let store = Store::open(&path, false).unwrap();
+        store.db.busy_timeout(Duration::from_millis(50)).unwrap();
+        let mut monitor = Monitor::new(Config::default(), store).unwrap();
+        let cycle = monitor.cycle;
+        let sample = |host: &str| Sample {
+            host: host.into(),
+            status: "valid".into(),
+            utc: utc(),
+            ..Default::default()
+        };
+        // A reader holding a read transaction, as an export or report does.
+        let reader = Store::open(&path, true).unwrap();
+        reader.db.execute_batch("BEGIN").unwrap();
+        let _: i64 = reader
+            .db
+            .query_row("SELECT count(*) FROM samples", [], |r| r.get(0))
+            .unwrap();
+        monitor.record("proof", json!({}));
+        monitor
+            .persist(vec![sample("a")], &json!({"selected":null}), &[])
+            .unwrap();
+        assert_eq!(monitor.cycle, cycle);
+        assert!(monitor.blocked_since.is_some());
+        reader.db.execute_batch("COMMIT").unwrap();
+        monitor
+            .persist(vec![sample("b")], &json!({"selected":null}), &[])
+            .unwrap();
+        assert_eq!(monitor.cycle, cycle + 1);
+        let count = |sql: &str| -> i64 { reader.db.query_row(sql, [], |r| r.get(0)).unwrap() };
+        assert_eq!(count("SELECT count(*) FROM samples"), 2);
+        assert_eq!(count("SELECT count(*) FROM events WHERE kind='proof'"), 1);
+        assert_eq!(monitor.events[0].1, "history_write_resumed");
+        drop((reader, monitor));
+        std::fs::remove_dir_all(root).unwrap();
     }
 }

@@ -29,6 +29,15 @@ fn payload_text(value: rusqlite::types::ValueRef<'_>) -> rusqlite::Result<String
         _ => Err(rusqlite::Error::InvalidQuery),
     }
 }
+/// SQLITE_BUSY/SQLITE_LOCKED: another connection, such as an export, a report
+/// or any program reading the file, held the database past the busy timeout.
+pub fn is_busy(error: &anyhow::Error) -> bool {
+    matches!(
+        error.downcast_ref::<rusqlite::Error>(),
+        Some(rusqlite::Error::SqliteFailure(e, _))
+            if matches!(e.code, rusqlite::ErrorCode::DatabaseBusy | rusqlite::ErrorCode::DatabaseLocked)
+    )
+}
 fn compact_decision(value: &Value) -> Value {
     let mut value = value.clone();
     if let Some(object) = value.as_object_mut() {
@@ -92,12 +101,15 @@ impl Store {
         self.diagnostic_logging = cfg.diagnostic_logging;
     }
     pub fn event(&self, kind: &str, value: &Value) -> Result<()> {
+        self.event_at(utc(), kind, value)
+    }
+    pub fn event_at(&self, at: f64, kind: &str, value: &Value) -> Result<()> {
         if !self.logging_enabled {
             return Ok(());
         }
         self.db.execute(
             "INSERT INTO events(utc,kind,payload) VALUES(?,?,?)",
-            params![utc(), kind, value.to_string()],
+            params![at, kind, value.to_string()],
         )?;
         Ok(())
     }
