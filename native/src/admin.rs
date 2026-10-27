@@ -59,6 +59,7 @@ pub fn dispatch(args: &[String]) -> Result<bool> {
             "--remove-service",
             "--prepare-upgrade",
             "--finish-upgrade",
+            "--secure-data-folder",
         ]
         .contains(s)
     }) else {
@@ -66,6 +67,18 @@ pub fn dispatch(args: &[String]) -> Result<bool> {
     };
     require_admin()?;
     let _lock = Lock::new()?;
+    if command == "--secure-data-folder" {
+        // Nothing in the folder is read before it is checked.
+        use ownership::Services;
+        ensure!(
+            !WindowsServices.snapshot(service::NAME)?.exists,
+            "The service is registered; use the upgrade path"
+        );
+        if let Some(aside) = crate::windows::secure_data_root(&service::root())? {
+            println!("Moved untrusted data folder to {}", aside.display());
+        }
+        return Ok(true);
+    }
     if !["--prepare-upgrade", "--finish-upgrade", "--rollback"].contains(&command) {
         ensure!(
             !crate::upgrade::pending()?,

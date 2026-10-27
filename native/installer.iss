@@ -23,8 +23,9 @@ Name: "observer"; Description: "Start the Windows service automatically (measure
 Name: "tray"; Description: "Start in the system tray when signing in"
 
 [Dirs]
-Name: "{commonappdata}\NetTimeNextNativePreview"; Permissions: users-readexec
-Name: "{commonappdata}\NetTimeNextNativePreview\data"; Permissions: users-readexec service-modify
+; ACLs are set by --secure-data-folder before installation (protected, not inherited).
+Name: "{commonappdata}\NetTimeNextNativePreview"
+Name: "{commonappdata}\NetTimeNextNativePreview\data"
 
 [Files]
 Source: "target\release\NetTimeNextNative.exe"; DestDir: "{app}"; Flags: ignoreversion
@@ -53,10 +54,14 @@ var ResultCode: Integer;
 begin
   Result := '';
   UpgradingExisting := RegKeyExists(HKLM, 'SYSTEM\CurrentControlSet\Services\NetTimeNextNativePreview');
+  ExtractTemporaryFile('NetTimeNextNativeService.exe');
   if UpgradingExisting then begin
-    ExtractTemporaryFile('NetTimeNextNativeService.exe');
     if (not Exec(ExpandConstant('{tmp}\NetTimeNextNativeService.exe'), '--prepare-upgrade', '', SW_HIDE, ewWaitUntilTerminated, ResultCode)) or (ResultCode <> 0) then
       Result := 'The native collector could not safely pause for upgrade. Existing clock ownership was not transferred. See ProgramData\NetTimeNextNativePreview\admin-result.json.';
+  end else begin
+    // ProgramData lets standard users create folders; never trust one made before this install.
+    if (not Exec(ExpandConstant('{tmp}\NetTimeNextNativeService.exe'), '--secure-data-folder', '', SW_HIDE, ewWaitUntilTerminated, ResultCode)) or (ResultCode <> 0) then
+      Result := 'The data folder ProgramData\NetTimeNextNativePreview could not be secured. Nothing was installed.';
   end;
 end;
 procedure CurStepChanged(CurStep: TSetupStep);
