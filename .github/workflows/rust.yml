@@ -1,9 +1,11 @@
 name: Windows release checks
+# Only trusted revisions reach the shared, persistent self-hosted runner: pushes
+# to main and manual dispatch (which needs write access). No pull_request
+# trigger, so fork code never runs there, even after approval.
 on:
   workflow_dispatch:
   push:
-    paths: ['native/**', '.github/workflows/rust.yml', 'desktop.manifest', 'nettime.ico']
-  pull_request:
+    branches: [main]
     paths: ['native/**', '.github/workflows/rust.yml', 'desktop.manifest', 'nettime.ico']
 permissions:
   contents: read
@@ -13,6 +15,7 @@ permissions:
 # disposable, repository-only Windows VM exists for them.
 jobs:
   native:
+    if: github.repository == 'optimusprime-nn/nettime-next'
     runs-on: [self-hosted, windows, msvc]
     timeout-minutes: 40
     defaults:

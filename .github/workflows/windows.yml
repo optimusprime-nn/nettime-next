@@ -1,7 +1,10 @@
 name: Windows build and tests
+# Only trusted revisions reach the shared, persistent self-hosted runner: pushes
+# to main and manual dispatch (which needs write access). No pull_request
+# trigger, so fork code never runs there, even after approval.
 on:
   push:
-  pull_request:
+    branches: [main]
   workflow_dispatch:
 
 permissions:
@@ -13,6 +16,7 @@ permissions:
 # Windows VM exists for it.
 jobs:
   windows:
+    if: github.repository == 'optimusprime-nn/nettime-next'
     runs-on: [self-hosted, windows, msvc]
     timeout-minutes: 25
     defaults:
