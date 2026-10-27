@@ -359,6 +359,7 @@ pub fn activate(root: &Path, backend: &mut impl Services) -> Result<()> {
         cfg.clock.mode == "observe",
         "Service must start in observe mode"
     );
+    cfg.validate_correction()?;
     let store = Store::open(&root.join("data/history.sqlite3"), true)?;
     let decision = store.latest()?.context("Wait for source measurements")?;
     let instance: serde_json::Value =

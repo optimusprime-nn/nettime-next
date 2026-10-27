@@ -177,6 +177,7 @@ pub fn apply(
     // A draft can neither grant takeover nor revoke an existing transaction.
     next.clock.mode = if owned { "slew" } else { "observe" }.into();
     if owned {
+        next.validate_correction()?;
         ensure!(
             old.clock.mode == "slew" && own.running && ownership::guard(root, backend)?,
             "Active clock ownership must be healthy before applying settings"

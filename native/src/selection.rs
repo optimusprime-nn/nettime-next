@@ -45,8 +45,10 @@ impl Peer {
         if s.status == "control" {
             match s.kod.as_str() {
                 "RATE" => {
-                    self.interval =
-                        (self.interval * 2.).max(2_f64.powi((s.poll as i32).clamp(6, 17)))
+                    // Bounded by the longest configurable poll interval.
+                    self.interval = (self.interval * 2.)
+                        .max(2_f64.powi((s.poll as i32).clamp(6, 17)))
+                        .min(131072.)
                 }
                 "DENY" | "RSTR" => {
                     self.disabled = format!(
@@ -473,6 +475,18 @@ mod tests {
         let a = assess(&p, &c, 1077.);
         assert!(!a.ready);
         assert_eq!(a.reasons[&p[0].server.key()], "timed out");
+    }
+    #[test]
+    fn rate_kiss_of_death_backoff_is_bounded() {
+        let (mut p, _) = peers(1);
+        for _ in 0..40 {
+            p[0].accept(Sample {
+                status: "control".into(),
+                kod: "RATE".into(),
+                ..Default::default()
+            });
+        }
+        assert_eq!(p[0].interval, 131072.);
     }
     #[test]
     fn kiss_of_death_removes_a_source_at_once() {
