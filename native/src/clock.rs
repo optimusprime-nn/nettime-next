@@ -208,6 +208,34 @@ impl Planner {
         result
     }
 }
+/// Outcome of an ownership check. A check that fails (an SCM query error, or
+/// another service briefly in a pending state) is Unknown, not a conflict:
+/// correction pauses at the neutral rate until ownership is verified again,
+/// instead of stopping the service for good.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub enum Ownership {
+    Verified,
+    Conflict,
+    Unknown,
+}
+impl Ownership {
+    pub fn check(root: &std::path::Path) -> Self {
+        match crate::ownership::guard(root, &mut crate::ownership::WindowsServices) {
+            Ok(true) => Self::Verified,
+            Ok(false) => Self::Conflict,
+            Err(_) => Self::Unknown,
+        }
+    }
+}
+impl From<bool> for Ownership {
+    fn from(verified: bool) -> Self {
+        if verified {
+            Self::Verified
+        } else {
+            Self::Conflict
+        }
+    }
+}
 pub struct Controller<B: Backend> {
     pub planner: Planner,
     backend: B,
@@ -222,10 +250,26 @@ impl<B: Backend> Controller<B> {
             suspended: true,
         })
     }
-    pub fn update(&mut self, assessment: &Assessment, now: f64, ownership: bool) -> Result<Plan> {
-        if !ownership {
-            self.close()?;
-            anyhow::bail!("Clock ownership conflict; correction stopped");
+    pub fn update(
+        &mut self,
+        assessment: &Assessment,
+        now: f64,
+        ownership: impl Into<Ownership>,
+    ) -> Result<Plan> {
+        match ownership.into() {
+            Ownership::Conflict => {
+                self.close()?;
+                anyhow::bail!("Clock ownership conflict; correction stopped");
+            }
+            Ownership::Unknown => {
+                self.close()?;
+                return Ok(Plan::new(
+                    "suspend",
+                    0.,
+                    "Clock ownership could not be verified; correction paused at the neutral rate",
+                ));
+            }
+            Ownership::Verified => {}
         }
         let mut plan = self.planner.plan(assessment, now);
         match plan.action.as_str() {
@@ -241,10 +285,19 @@ impl<B: Backend> Controller<B> {
         }
         Ok(plan)
     }
-    pub fn watchdog(&mut self, now: f64, ownership: bool) -> Result<bool> {
-        if !ownership {
-            self.close()?;
-            anyhow::bail!("Clock ownership conflict detected by watchdog");
+    pub fn watchdog(&mut self, now: f64, ownership: impl Into<Ownership>) -> Result<bool> {
+        match ownership.into() {
+            Ownership::Conflict => {
+                self.close()?;
+                anyhow::bail!("Clock ownership conflict detected by watchdog");
+            }
+            Ownership::Unknown => {
+                if !self.suspended {
+                    self.close()?;
+                }
+                return Ok(false);
+            }
+            Ownership::Verified => {}
         }
         if !self.suspended
             && self
@@ -298,9 +351,7 @@ impl Session {
             use std::sync::atomic::Ordering;
             while !stop.load(Ordering::Relaxed) {
                 let result = (|| -> Result<bool> {
-                    let guard =
-                        crate::ownership::guard(&folder, &mut crate::ownership::WindowsServices)
-                            .unwrap_or(false);
+                    let guard = Ownership::check(&folder);
                     c.lock()
                         .map_err(|_| anyhow::anyhow!("Clock controller lock failed"))?
                         .watchdog(crate::protocol::mono(), guard)
@@ -358,8 +409,7 @@ impl Session {
     }
     pub fn update(&self, assessment: &Assessment, now: f64) -> Result<Plan> {
         self.check()?;
-        let guard = crate::ownership::guard(&self.root, &mut crate::ownership::WindowsServices)
-            .unwrap_or(false);
+        let guard = Ownership::check(&self.root);
         self.controller
             .lock()
             .map_err(|_| anyhow::anyhow!("Clock controller lock failed"))?
@@ -439,6 +489,26 @@ mod tests {
         assert_eq!(calls.borrow().len(), count);
         assert!(c.watchdog(131., false).is_err());
         assert_eq!(*calls.borrow().last().unwrap(), 0.);
+    }
+    #[test]
+    fn unverifiable_ownership_pauses_without_stopping() {
+        let calls = Rc::new(RefCell::new(vec![]));
+        let mut c = Controller::new(Clock::default(), Fake(calls.clone())).unwrap();
+        for stamp in [1., 65., 129.] {
+            c.update(&assessment(stamp, 100.), stamp, true).unwrap();
+        }
+        assert!(*calls.borrow().last().unwrap() > 0.);
+        assert!(!c.watchdog(130., Ownership::Unknown).unwrap());
+        assert_eq!(*calls.borrow().last().unwrap(), 0.);
+        let plan = c
+            .update(&assessment(193., 100.), 193., Ownership::Unknown)
+            .unwrap();
+        assert_eq!(plan.action, "suspend");
+        assert_eq!(plan.rate_ppm, 0.);
+        // Once verified again, correction restarts through warmup.
+        let plan = c.update(&assessment(257., 100.), 257., true).unwrap();
+        assert_eq!(plan.action, "warmup");
+        assert!(c.watchdog(258., Ownership::Conflict).is_err());
     }
     #[test]
     fn stale_excessive_leap_and_holdover_suspend() {
