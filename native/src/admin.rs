@@ -8,41 +8,113 @@ use crate::{
 use anyhow::{Result, ensure};
 use std::path::Path;
 use windows_sys::Win32::{
-    Foundation::{WAIT_ABANDONED, WAIT_OBJECT_0},
-    System::Threading::{CreateMutexW, GetExitCodeProcess, ReleaseMutex, WaitForSingleObject},
+    Foundation::{HANDLE, LocalFree, WAIT_ABANDONED, WAIT_OBJECT_0},
+    Security::{
+        Authorization::ConvertStringSecurityDescriptorToSecurityDescriptorW, CreateWellKnownSid,
+        SECURITY_ATTRIBUTES, WinBuiltinAdministratorsSid,
+    },
+    System::Threading::{
+        AddSIDToBoundaryDescriptor, ClosePrivateNamespace, CreateBoundaryDescriptorW, CreateMutexW,
+        CreatePrivateNamespaceW, DeleteBoundaryDescriptor, GetExitCodeProcess,
+        OpenPrivateNamespaceW, ReleaseMutex, WaitForSingleObject,
+    },
     UI::{
         Shell::{SEE_MASK_NOASYNC, SEE_MASK_NOCLOSEPROCESS, SHELLEXECUTEINFOW, ShellExecuteExW},
         WindowsAndMessaging::SW_HIDE,
     },
 };
 
-struct Lock(Handle);
+/// Serialises administrator actions. The mutex lives in a private namespace
+/// whose boundary requires the Administrators group, so a standard user cannot
+/// create or hold it. A mutex in the Global namespace could be pre-created by
+/// any user and held open to block every administrator action.
+struct Lock {
+    mutex: Option<Handle>,
+    namespace: HANDLE,
+    boundary: HANDLE,
+}
 impl Lock {
     fn new() -> Result<Self> {
-        let handle = unsafe {
-            CreateMutexW(
-                std::ptr::null(),
-                0,
-                wide("Global\\NetTimeNextNativeAdministration").as_ptr(),
-            )
+        let mut lock = Self {
+            mutex: None,
+            namespace: std::ptr::null_mut(),
+            boundary: std::ptr::null_mut(),
         };
-        ensure!(
-            !handle.is_null(),
-            "Cannot lock native service administration"
-        );
-        let handle = Handle(handle);
-        let result = unsafe { WaitForSingleObject(handle.0, 0) };
-        ensure!(
-            [WAIT_OBJECT_0, WAIT_ABANDONED].contains(&result),
-            "Another service administration action is in progress"
-        );
-        Ok(Self(handle))
+        unsafe {
+            lock.boundary =
+                CreateBoundaryDescriptorW(wide("NetTimeNextNativeAdministration").as_ptr(), 0);
+            ensure!(
+                !lock.boundary.is_null(),
+                "Cannot lock native service administration"
+            );
+            let mut sid = [0u8; 68];
+            let mut size = sid.len() as u32;
+            check(CreateWellKnownSid(
+                WinBuiltinAdministratorsSid,
+                std::ptr::null_mut(),
+                sid.as_mut_ptr().cast(),
+                &mut size,
+            ))?;
+            check(AddSIDToBoundaryDescriptor(
+                &mut lock.boundary,
+                sid.as_mut_ptr().cast(),
+            ))?;
+            let mut descriptor = std::ptr::null_mut();
+            check(ConvertStringSecurityDescriptorToSecurityDescriptorW(
+                wide("D:P(A;;GA;;;SY)(A;;GA;;;BA)").as_ptr(),
+                1,
+                &mut descriptor,
+                std::ptr::null_mut(),
+            ))?;
+            let attributes = SECURITY_ATTRIBUTES {
+                nLength: std::mem::size_of::<SECURITY_ATTRIBUTES>() as u32,
+                lpSecurityDescriptor: descriptor,
+                bInheritHandle: 0,
+            };
+            let alias = wide("NetTimeNextNative");
+            lock.namespace = CreatePrivateNamespaceW(&attributes, lock.boundary, alias.as_ptr());
+            if lock.namespace.is_null() {
+                lock.namespace = OpenPrivateNamespaceW(lock.boundary, alias.as_ptr());
+            }
+            let mutex = if lock.namespace.is_null() {
+                std::ptr::null_mut()
+            } else {
+                CreateMutexW(
+                    &attributes,
+                    0,
+                    wide("NetTimeNextNative\\Administration").as_ptr(),
+                )
+            };
+            LocalFree(descriptor);
+            ensure!(
+                !mutex.is_null(),
+                "Cannot lock native service administration: {}",
+                std::io::Error::last_os_error()
+            );
+            let mutex = Handle(mutex);
+            let result = WaitForSingleObject(mutex.0, 0);
+            ensure!(
+                [WAIT_OBJECT_0, WAIT_ABANDONED].contains(&result),
+                "Another service administration action is in progress"
+            );
+            // Only an owned mutex is released on drop.
+            lock.mutex = Some(mutex);
+        }
+        Ok(lock)
     }
 }
 impl Drop for Lock {
     fn drop(&mut self) {
         unsafe {
-            ReleaseMutex(self.0.0);
+            if let Some(mutex) = self.mutex.take() {
+                ReleaseMutex(mutex.0);
+            }
+            if !self.namespace.is_null() {
+                ClosePrivateNamespace(self.namespace, 0);
+            }
+            if !self.boundary.is_null() {
+                DeleteBoundaryDescriptor(self.boundary);
+            }
         }
     }
 }
@@ -211,6 +283,19 @@ pub fn elevate(arguments: &[String]) -> Result<String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn standard_users_cannot_take_the_administration_lock() {
+        if require_admin().is_err() {
+            // A non-elevated token lacks the boundary's Administrators SID.
+            assert!(Lock::new().is_err());
+        } else {
+            let held = Lock::new().unwrap();
+            // Mutexes are re-entrant for their owner; contend from another thread.
+            assert!(std::thread::spawn(|| Lock::new().is_err()).join().unwrap());
+            drop(held);
+            Lock::new().unwrap();
+        }
+    }
     #[test]
     fn windows_argument_escaping() {
         assert_eq!(quote("a b"), "\"a b\"");
