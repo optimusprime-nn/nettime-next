@@ -174,6 +174,7 @@ pub fn query(server: &Server, timeout: f64, poll: f64, client: &mut NtsClient) -
         ..Default::default()
     };
     let mut prepared = false;
+    let mut resolved = false;
     let result = (|| -> Result<()> {
         let secure = server.security == "nts_required";
         if secure {
@@ -186,10 +187,11 @@ pub fn query(server: &Server, timeout: f64, poll: f64, client: &mut NtsClient) -
         } else {
             (server.host.clone(), server.port)
         };
-        let endpoint = (host.as_str(), port)
-            .to_socket_addrs()?
-            .next()
+        let addresses: Vec<_> = (host.as_str(), port).to_socket_addrs()?.collect();
+        let endpoint = *addresses
+            .get(client.address_cursor % addresses.len().max(1))
             .ok_or_else(|| anyhow::anyhow!("No resolved address"))?;
+        resolved = true;
         let socket = UdpSocket::bind(if endpoint.is_ipv6() {
             "[::]:0"
         } else {
@@ -285,8 +287,18 @@ pub fn query(server: &Server, timeout: f64, poll: f64, client: &mut NtsClient) -
             return Ok(());
         }
     })();
+    if result.is_ok() {
+        client.address_failures = 0;
+    }
     if let Err(e) = result {
         s.reason = e.to_string();
+        if resolved {
+            client.address_failures += 1;
+            if client.address_failures >= 2 {
+                client.address_failures = 0;
+                client.address_cursor = client.address_cursor.wrapping_add(1);
+            }
+        }
         // Key-establishment failures are counted inside prepare.
         if prepared && s.authentication_status != "authenticated" {
             client.exchange_failed();
@@ -422,6 +434,50 @@ mod tests {
             host: "127.0.0.1".into(),
             port,
             ..Default::default()
+        }
+    }
+    #[test]
+    fn failed_poll_moves_to_the_next_resolved_address() {
+        // "localhost" resolves to ::1 and 127.0.0.1 in either order; only
+        // 127.0.0.1 answers. Each address gets two polls before the next.
+        let socket = UdpSocket::bind("127.0.0.1:0").unwrap();
+        let port = socket.local_addr().unwrap().port();
+        std::thread::spawn(move || {
+            let mut request = [0u8; 1024];
+            while let Ok((_, client)) = socket.recv_from(&mut request) {
+                let now = encode(utc());
+                let mut reply = [0u8; 48];
+                reply[0] = 0x24;
+                reply[1] = 2;
+                reply[16..24].copy_from_slice(&encode(utc() - 1.));
+                reply[24..32].copy_from_slice(&request[40..48]);
+                reply[32..40].copy_from_slice(&now);
+                reply[40..48].copy_from_slice(&now);
+                socket.send_to(&reply, client).unwrap();
+            }
+        });
+        let server = Server {
+            host: "localhost".into(),
+            port,
+            ..Default::default()
+        };
+        let resolved = ("localhost", port).to_socket_addrs().unwrap().count();
+        let mut client = NtsClient::default();
+        let polls: Vec<_> = (0..2 * resolved)
+            .map(|_| query(&server, 0.3, 64., &mut client))
+            .collect();
+        assert!(
+            polls
+                .iter()
+                .any(|s| s.status == "valid" && s.address == "127.0.0.1"),
+            "{:?}",
+            polls.iter().map(|s| &s.reason).collect::<Vec<_>>()
+        );
+        // A working address is kept.
+        let cursor = client.address_cursor;
+        if polls.last().unwrap().status == "valid" {
+            assert_eq!(query(&server, 0.3, 64., &mut client).status, "valid");
+            assert_eq!(client.address_cursor, cursor);
         }
     }
     #[test]

@@ -148,11 +148,20 @@ impl Session {
     }
 }
 fn establish(server: &Server, timeout: f64) -> Result<Session> {
-    let endpoint = (server.host.as_str(), server.nts_ke_port)
-        .to_socket_addrs()?
-        .next()
-        .ok_or_else(|| anyhow::anyhow!("No NTS-KE address"))?;
-    let socket = TcpStream::connect_timeout(&endpoint, Duration::from_secs_f64(timeout))?;
+    // Try each resolved address in turn; one unreachable address (for example
+    // IPv6 without a route) must not block key establishment.
+    let mut last = anyhow::anyhow!("No NTS-KE address");
+    let mut connected = None;
+    for address in (server.host.as_str(), server.nts_ke_port).to_socket_addrs()? {
+        match TcpStream::connect_timeout(&address, Duration::from_secs_f64(timeout)) {
+            Ok(socket) => {
+                connected = Some((address, socket));
+                break;
+            }
+            Err(e) => last = e.into(),
+        }
+    }
+    let (endpoint, socket) = connected.ok_or(last)?;
     socket.set_read_timeout(Some(Duration::from_secs_f64(timeout)))?;
     socket.set_write_timeout(Some(Duration::from_secs_f64(timeout)))?;
     let roots = RootCertStore::from_iter(webpki_roots::TLS_SERVER_ROOTS.iter().cloned());
@@ -282,6 +291,12 @@ pub struct NtsClient {
     pub retry_at: f64,
     /// Consecutive failed exchanges on the current session.
     pub misses: u32,
+    /// Which resolved NTP address to use. It advances after two consecutive
+    /// failed exchanges (one loss keeps the address and its sample filter), so
+    /// a server with several addresses is not stuck on an unreachable one.
+    /// Plain-NTP sources use it too.
+    pub address_cursor: usize,
+    pub address_failures: u32,
 }
 impl NtsClient {
     /// Establishes a session when needed. Only real NTS-KE attempts count as
