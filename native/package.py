@@ -6,6 +6,7 @@ import os
 from pathlib import Path
 import shutil
 import subprocess
+import sys
 import tomllib
 from check_privacy import verify as verify_privacy
 
@@ -40,6 +41,7 @@ def main():
     run(cargo,'fmt','--check')
     run(cargo,'test','--locked')
     run(cargo,'build','--release','--locked')
+    run(sys.executable,'-m','unittest','-q','test_check_imports')
     from check_imports import verify
     for name in ('NetTimeNextNative.exe','NetTimeNextNativeService.exe'):
         verify(ROOT/'target'/'release'/name)
