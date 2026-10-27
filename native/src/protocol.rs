@@ -236,8 +236,7 @@ pub fn query(server: &Server, timeout: f64, poll: f64, client: &mut NtsClient) -
             s.certificate_sha256 = n.fingerprint.clone();
             ensure!(size >= 48, "Truncated authenticated NTP header");
             parse(&buffer[..48], &stamp, &mut s)?;
-            client.failures = 0;
-            client.retry_at = 0.;
+            client.exchange_succeeded();
         } else {
             parse(&buffer[..size], &stamp, &mut s)?;
         }
@@ -316,6 +315,32 @@ mod tests {
         query(&server, 2., 64., &mut client);
         assert_eq!(client.failures, 30);
         assert!(client.retry_at - mono() <= crate::nts::MAX_BACKOFF);
+    }
+    #[test]
+    fn lost_nts_reply_keeps_session_until_repeated() {
+        // A bound socket that never answers: every exchange times out.
+        let silent = UdpSocket::bind("127.0.0.1:0").unwrap();
+        let port = silent.local_addr().unwrap().port();
+        let server = Server {
+            host: "127.0.0.1".into(),
+            security: "nts_required".into(),
+            ..Default::default()
+        };
+        let mut client = NtsClient {
+            session: Some(crate::nts::Session::for_test("127.0.0.1", port, 8)),
+            ..Default::default()
+        };
+        for lost in 1..crate::nts::MAX_MISSES {
+            let sample = query(&server, 0.2, 64., &mut client);
+            assert_eq!(sample.status, "error");
+            let session = client.session.as_ref().expect("session kept");
+            assert_eq!(session.cookies.len(), 8 - lost as usize);
+            assert_eq!(client.failures, 0);
+            assert_eq!(client.retry_at, 0.);
+        }
+        query(&server, 0.2, 64., &mut client);
+        assert!(client.session.is_none());
+        assert_eq!(client.failures, 1);
     }
     #[test]
     #[ignore = "Explicit external NTS interoperability check; two volleys 65 seconds apart"]

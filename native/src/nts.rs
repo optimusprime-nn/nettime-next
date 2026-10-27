@@ -272,11 +272,16 @@ fn establish(server: &Server, timeout: f64) -> Result<Session> {
 /// Longest wait between failed NTS-KE attempts. Longer waits leave an NTS source
 /// unused for hours after the network returns.
 pub const MAX_BACKOFF: f64 = 3600.;
+/// Consecutive failed exchanges after which the session is presumed unusable
+/// (for example rotated server keys) and NTS-KE runs again.
+pub const MAX_MISSES: u32 = 3;
 #[derive(Default)]
 pub struct NtsClient {
     pub session: Option<Session>,
     pub failures: u32,
     pub retry_at: f64,
+    /// Consecutive failed exchanges on the current session.
+    pub misses: u32,
 }
 impl NtsClient {
     /// Establishes a session when needed. Only real NTS-KE attempts count as
@@ -290,7 +295,10 @@ impl NtsClient {
             ensure!(mono() >= self.retry_at, "NTS key establishment backoff");
             self.session = None;
             match establish(s, timeout) {
-                Ok(session) => self.session = Some(session),
+                Ok(session) => {
+                    self.session = Some(session);
+                    self.misses = 0;
+                }
                 Err(e) => {
                     self.failed();
                     return Err(e);
@@ -299,14 +307,41 @@ impl NtsClient {
         }
         Ok(())
     }
-    /// A failed exchange on an established session.
+    /// A failed exchange on an established session. Its cookie is already spent,
+    /// so later polls use the next one (RFC 8915 section 5.7). A lost packet must
+    /// not discard the remaining cookies and force a new key exchange.
     pub fn exchange_failed(&mut self) {
-        self.failed();
+        self.misses += 1;
+        if self.misses >= MAX_MISSES {
+            self.misses = 0;
+            self.failed();
+        }
+    }
+    pub fn exchange_succeeded(&mut self) {
+        self.failures = 0;
+        self.retry_at = 0.;
+        self.misses = 0;
     }
     fn failed(&mut self) {
         self.failures = (self.failures + 1).min(30);
         self.retry_at = mono() + (10. * 1.5_f64.powi(self.failures as i32 - 1)).min(MAX_BACKOFF);
         self.session = None;
+    }
+}
+
+#[cfg(test)]
+impl Session {
+    /// A session with fixed keys and placeholder cookies for offline tests.
+    pub fn for_test(host: &str, port: u16, cookies: usize) -> Self {
+        Session {
+            host: host.into(),
+            port,
+            c2s: Zeroizing::new(vec![1; 32]),
+            s2c: Zeroizing::new(vec![2; 32]),
+            cookies: (0..cookies).map(|_| Zeroizing::new(vec![7; 64])).collect(),
+            established: mono(),
+            fingerprint: String::new(),
+        }
     }
 }
 
