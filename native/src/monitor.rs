@@ -51,8 +51,10 @@ impl Monitor {
                 p.reach = state["reach"].as_u64().unwrap_or(0) as u8;
                 p.next_due = now + (state["next_utc"].as_f64().unwrap_or(0.) - wall).max(0.);
                 p.nts.failures = state["nts_failures"].as_u64().unwrap_or(0) as u32;
-                p.nts.retry_at =
-                    now + (state["nts_retry_utc"].as_f64().unwrap_or(0.) - wall).max(0.);
+                // Earlier versions saved backoffs of up to five days.
+                p.nts.retry_at = now
+                    + (state["nts_retry_utc"].as_f64().unwrap_or(0.) - wall)
+                        .clamp(0., crate::nts::MAX_BACKOFF);
             }
         }
         let cycle = store.next_cycle()?;

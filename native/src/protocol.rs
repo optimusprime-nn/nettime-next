@@ -165,10 +165,12 @@ pub fn query(server: &Server, timeout: f64, poll: f64, client: &mut NtsClient) -
         .into(),
         ..Default::default()
     };
+    let mut prepared = false;
     let result = (|| -> Result<()> {
         let secure = server.security == "nts_required";
         if secure {
             client.prepare(server, timeout)?;
+            prepared = true;
         }
         let (host, port) = if secure {
             let n = client.session.as_ref().unwrap();
@@ -243,8 +245,9 @@ pub fn query(server: &Server, timeout: f64, poll: f64, client: &mut NtsClient) -
     })();
     if let Err(e) = result {
         s.reason = e.to_string();
-        if server.security == "nts_required" && s.authentication_status != "authenticated" {
-            client.failed();
+        // Key-establishment failures are counted inside prepare.
+        if prepared && s.authentication_status != "authenticated" {
+            client.exchange_failed();
         }
     }
     s
@@ -269,6 +272,50 @@ mod tests {
         raw[24..32].copy_from_slice(&[1; 8]);
         raw[0] |= 0xc0;
         assert!(parse(&raw, &[1; 8], &mut s).is_err());
+    }
+    /// An NTS-KE endpoint on loopback that closes every connection before TLS.
+    fn refusing_key_exchange() -> Server {
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let port = listener.local_addr().unwrap().port();
+        std::thread::spawn(move || {
+            for stream in listener.incoming() {
+                drop(stream);
+            }
+        });
+        Server {
+            host: "127.0.0.1".into(),
+            nts_ke_port: port,
+            security: "nts_required".into(),
+            ..Default::default()
+        }
+    }
+    #[test]
+    fn polls_during_nts_backoff_do_not_extend_it() {
+        let server = refusing_key_exchange();
+        let mut client = NtsClient::default();
+        let first = query(&server, 2., 64., &mut client);
+        assert_eq!(first.status, "error");
+        assert_eq!(client.failures, 1);
+        let retry_at = client.retry_at;
+        assert!(retry_at > mono());
+        for _ in 0..20 {
+            let refused = query(&server, 2., 64., &mut client);
+            assert_eq!(refused.reason, "NTS key establishment backoff");
+            assert_eq!(refused.authentication_status, "failed");
+        }
+        assert_eq!(client.failures, 1);
+        assert_eq!(client.retry_at, retry_at);
+    }
+    #[test]
+    fn nts_backoff_is_bounded() {
+        let server = refusing_key_exchange();
+        let mut client = NtsClient {
+            failures: 29,
+            ..Default::default()
+        };
+        query(&server, 2., 64., &mut client);
+        assert_eq!(client.failures, 30);
+        assert!(client.retry_at - mono() <= crate::nts::MAX_BACKOFF);
     }
     #[test]
     #[ignore = "Explicit external NTS interoperability check; two volleys 65 seconds apart"]

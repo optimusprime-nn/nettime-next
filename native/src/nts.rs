@@ -269,6 +269,9 @@ fn establish(server: &Server, timeout: f64) -> Result<Session> {
         fingerprint,
     })
 }
+/// Longest wait between failed NTS-KE attempts. Longer waits leave an NTS source
+/// unused for hours after the network returns.
+pub const MAX_BACKOFF: f64 = 3600.;
 #[derive(Default)]
 pub struct NtsClient {
     pub session: Option<Session>,
@@ -276,20 +279,33 @@ pub struct NtsClient {
     pub retry_at: f64,
 }
 impl NtsClient {
+    /// Establishes a session when needed. Only real NTS-KE attempts count as
+    /// failures: a poll refused during the backoff must not extend the backoff.
     pub fn prepare(&mut self, s: &Server, timeout: f64) -> Result<()> {
-        ensure!(mono() >= self.retry_at, "NTS key establishment backoff");
         if self
             .session
             .as_ref()
             .is_none_or(|n| n.cookies.is_empty() || mono() - n.established > 86400.)
         {
-            self.session = Some(establish(s, timeout)?);
+            ensure!(mono() >= self.retry_at, "NTS key establishment backoff");
+            self.session = None;
+            match establish(s, timeout) {
+                Ok(session) => self.session = Some(session),
+                Err(e) => {
+                    self.failed();
+                    return Err(e);
+                }
+            }
         }
         Ok(())
     }
-    pub fn failed(&mut self) {
+    /// A failed exchange on an established session.
+    pub fn exchange_failed(&mut self) {
+        self.failed();
+    }
+    fn failed(&mut self) {
         self.failures = (self.failures + 1).min(30);
-        self.retry_at = mono() + (10. * 1.5_f64.powi(self.failures as i32 - 1)).min(432000.);
+        self.retry_at = mono() + (10. * 1.5_f64.powi(self.failures as i32 - 1)).min(MAX_BACKOFF);
         self.session = None;
     }
 }
