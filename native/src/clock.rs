@@ -99,10 +99,15 @@ pub struct Planner {
     last_sample: Option<f64>,
     last_offset: f64,
     frequency: f64,
+    /// Sample time and offset the next frequency estimate is measured from.
+    /// It only moves when an estimate is made, so a newer sample from a source
+    /// polled in the same round (milliseconds later) cannot turn a small
+    /// offset difference between servers into a huge apparent drift.
+    anchor: Option<(f64, f64)>,
     rate: f64,
-    /// When each rate took effect (monotonic seconds), kept back to the last
-    /// sample, so the frequency estimate uses the rates actually applied
-    /// between two sample times rather than only the current one.
+    /// When each rate took effect (monotonic seconds), kept back to the
+    /// anchor, so the frequency estimate uses the rates actually applied
+    /// between the two sample times rather than only the current one.
     rate_log: Vec<(f64, f64)>,
     updates: usize,
     recovering: bool,
@@ -115,6 +120,7 @@ impl Planner {
             last_sample: None,
             last_offset: 0.,
             frequency: 0.,
+            anchor: None,
             rate: 0.,
             rate_log: vec![],
             updates: 0,
@@ -190,22 +196,34 @@ impl Planner {
                 )
                 .evidence(offset, recovering);
             }
-            let elapsed = stamp - last;
-            if elapsed > self.options.holdover_seconds {
+            if stamp - last > self.options.holdover_seconds {
                 self.reset();
                 self.recovering = recovering;
-            } else {
+            }
+        }
+        // Estimate frequency only over at least half a poll interval (16 s
+        // minimum); a shorter span leaves the anchor in place for later.
+        let span = (assessment.interval_seconds / 2.).max(16.);
+        match self.anchor {
+            Some((from, _)) if stamp - from > self.options.holdover_seconds => {
+                self.anchor = Some((stamp, offset));
+            }
+            Some((from, anchor_offset)) if stamp - from >= span => {
                 let estimate =
-                    (offset - self.last_offset) * 1000. / elapsed + self.mean_rate(last, stamp);
+                    (offset - anchor_offset) * 1000. / (stamp - from) + self.mean_rate(from, stamp);
                 self.frequency += 0.125
                     * (estimate.clamp(-self.options.max_slew_ppm, self.options.max_slew_ppm)
                         - self.frequency);
+                self.anchor = Some((stamp, offset));
             }
+            Some(_) => {}
+            None => self.anchor = Some((stamp, offset)),
         }
         self.last_sample = Some(stamp);
         self.last_offset = offset;
-        // Keep the rate in force at this sample time and everything after it.
-        if let Some(keep) = self.rate_log.iter().rposition(|&(at, _)| at <= stamp) {
+        // Keep the rate in force at the anchor time and everything after it.
+        let from = self.anchor.map_or(stamp, |a| a.0);
+        if let Some(keep) = self.rate_log.iter().rposition(|&(at, _)| at <= from) {
             self.rate_log.drain(..keep);
         }
         self.last_good = Some(now);
@@ -577,6 +595,47 @@ mod tests {
             }
         }
         assert!(worst_late < 1., "frequency error {worst_late:.3} ppm");
+    }
+    #[test]
+    fn system_peer_switch_within_one_poll_round_does_not_kick_frequency() {
+        // As observed on 1.0.1: all sources are polled at once, so when the
+        // system peer switches between two of them the new sample is only
+        // milliseconds newer, with an offset that differs by the servers'
+        // own disagreement. The local clock is 28 ppm fast.
+        const DRIFT: f64 = -28.;
+        let mut p = Planner::new(Clock::default());
+        let mut applied: Vec<(f64, f64)> = vec![(0., 0.)];
+        let offset_at = |applied: &[(f64, f64)], t: f64| {
+            let mut total = 0.;
+            for (i, &(from, rate)) in applied.iter().enumerate() {
+                let to = applied.get(i + 1).map_or(t, |next| next.0).min(t);
+                if to > from {
+                    total += (DRIFT - rate) * (to - from) / 1000.;
+                }
+            }
+            total
+        };
+        let (mut worst_frequency, mut worst_offset) = (0_f64, 0_f64);
+        for k in 1..=300 {
+            let stamp = 64. * k as f64;
+            let offset = offset_at(&applied, stamp);
+            let plan = p.plan(&assessment(stamp, offset), stamp + 1.);
+            applied.push((stamp + 1., plan.rate_ppm));
+            if k % 3 == 0 {
+                // Another server from the same round becomes system peer.
+                let plan = p.plan(&assessment(stamp + 0.005, offset - 0.4), stamp + 2.);
+                applied.push((stamp + 2., plan.rate_ppm));
+            }
+            if k > 100 {
+                worst_frequency = worst_frequency.max((p.frequency - DRIFT).abs());
+                worst_offset = worst_offset.max(offset.abs());
+            }
+        }
+        assert!(
+            worst_frequency < 3.,
+            "frequency error {worst_frequency:.2} ppm"
+        );
+        assert!(worst_offset < 2., "offset reached {worst_offset:.2} ms");
     }
     #[test]
     fn stale_excessive_leap_and_holdover_suspend() {
