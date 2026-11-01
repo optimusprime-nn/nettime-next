@@ -1,0 +1,49 @@
+name: Release
+on:
+  push:
+    tags: ['v*']
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    runs-on: windows-2022
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+      - name: Check tag matches native version
+        shell: pwsh
+        run: |
+          $version = (Select-String -Path native/Cargo.toml -Pattern '^version\s*=\s*"([^"]+)"').Matches[0].Groups[1].Value
+          if ("v$version" -ne $env:GITHUB_REF_NAME) { throw "Tag $env:GITHUB_REF_NAME does not match native/Cargo.toml version $version" }
+          "NETTIME_VERSION=$version" | Out-File -FilePath $env:GITHUB_ENV -Append
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: native -> target
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      - name: Package Windows release
+        shell: pwsh
+        run: |
+          $compiler = & ./scripts/Get-InnoSetup.ps1 -Destination "$env:RUNNER_TEMP/nettime-inno"
+          python ./native/package.py --iscc $compiler
+      - name: Native installed service lifecycle
+        shell: pwsh
+        run: ./native/test-installed.ps1 -Installer "./dist/NetTimeNext-$env:NETTIME_VERSION-Setup-x64.exe"
+      - name: Publish GitHub release
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+        run: |
+          $tag = $env:GITHUB_REF_NAME
+          gh release view $tag *> $null
+          if ($LASTEXITCODE -ne 0) {
+            gh release create $tag --title "NetTime Next $env:NETTIME_VERSION" --generate-notes --verify-tag
+            if ($LASTEXITCODE -ne 0) { throw 'Release creation failed' }
+          }
+          gh release upload $tag "dist/NetTimeNext-$env:NETTIME_VERSION-Setup-x64.exe" dist/SHA256SUMS.txt dist/build-manifest.json --clobber
+          if ($LASTEXITCODE -ne 0) { throw 'Asset upload failed' }
