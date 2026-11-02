@@ -1,0 +1,39 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>{% if page.url == "/" %}NetTime Next{% else %}{{ page.title }} · NetTime Next{% endif %}</title>
+<meta name="description" content="{{ site.description }}">
+<link rel="stylesheet" href="{{ '/assets/site.css' | relative_url }}">
+</head>
+<body>
+<header class="top">
+  <a class="brand" href="{{ '/' | relative_url }}"><span class="mark" aria-hidden="true"></span>NetTime Next</a>
+  <nav class="top-links">
+    <a href="https://github.com/optimusprime-nn/nettime-next/releases">Download</a>
+    <a href="https://github.com/optimusprime-nn/nettime-next">GitHub</a>
+  </nav>
+</header>
+<div class="shell">
+  <nav class="side" aria-label="Documentation">
+    {% for group in site.data.nav %}
+    <p class="side-head">{{ group.title }}</p>
+    <ul>
+      {% for item in group.pages %}
+      {% assign href = item.url | relative_url %}
+      <li><a href="{{ href }}"{% if page.url == item.url %} aria-current="page"{% endif %}>{{ item.title }}</a></li>
+      {% endfor %}
+    </ul>
+    {% endfor %}
+  </nav>
+  <main class="content">
+    {{ content }}
+    <footer class="foot">
+      Edit or discuss these pages on the
+      <a href="https://github.com/optimusprime-nn/nettime-next/wiki">project wiki</a>.
+    </footer>
+  </main>
+</div>
+</body>
+</html>

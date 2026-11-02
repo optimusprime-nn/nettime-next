@@ -1,0 +1,19 @@
+- title: "Overview"
+  pages:
+    - { title: "Home", url: "/" }
+- title: "Using it"
+  pages:
+    - { title: "Installation", url: "/Installation.html" }
+    - { title: "Taking over the clock", url: "/Taking-over-the-clock.html" }
+    - { title: "Time sources and NTS", url: "/Time-sources-and-NTS.html" }
+    - { title: "Settings reference", url: "/Settings-reference.html" }
+    - { title: "History and exports", url: "/History-and-exports.html" }
+    - { title: "Troubleshooting", url: "/Troubleshooting.html" }
+- title: "How it works"
+  pages:
+    - { title: "How correction works", url: "/How-correction-works.html" }
+    - { title: "Scope and validation", url: "/Scope-and-validation.html" }
+- title: "Reference"
+  pages:
+    - { title: "Command-line reference", url: "/Command-line-reference.html" }
+    - { title: "Building from source", url: "/Building-from-source.html" }

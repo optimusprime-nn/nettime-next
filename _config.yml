@@ -1,0 +1,8 @@
+title: NetTime Next
+description: Accurate, evidence-based time synchronization for Windows, with NTS.
+baseurl: /nettime-next
+url: https://optimusprime-nn.github.io
+markdown: kramdown
+kramdown:
+  input: GFM
+  hard_wrap: false
