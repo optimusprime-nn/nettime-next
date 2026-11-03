@@ -1,7 +1,23 @@
-# NetTime Next 1.0.1
+<p align="center">
+  <img src="docs/images/logo.png" width="112" height="112" alt="NetTime Next logo">
+</p>
 
-Network time monitoring and controlled synchronization for Windows 10/11 x64.
-The desktop and automatic Windows service run natively without a Python runtime.
+<h1 align="center">NetTime Next 1.0.1</h1>
+
+<p align="center">
+  Network time monitoring and controlled synchronization for Windows 10/11 x64, with NTS.<br>
+  The desktop and automatic Windows service run natively without a Python runtime.
+</p>
+
+<p align="center">
+  <a href="https://github.com/optimusprime-nn/nettime-next/releases"><b>Download</b></a> ·
+  <a href="https://optimusprime-nn.github.io/nettime-next/">Documentation</a> ·
+  <a href="https://github.com/optimusprime-nn/nettime-next/wiki">Wiki</a>
+</p>
+
+<p align="center">
+  <img src="docs/images/overview.png" width="860" alt="The NetTime Next overview, showing six time sources and their measurements">
+</p>
 
 ## Install
 
@@ -22,6 +38,8 @@ after three new agreeing filter samples, up to a separate 10-second recovery
 limit by default. The correction rate stays bounded; larger errors suspend
 correction for manual review. The controller never steps the clock.
 
+<p align="center"><img src="docs/images/clock-control.png" width="760" alt="Settings, Clock control page"><br><sub>Settings &gt; Clock control, in measurement mode</sub></p>
+
 Upgrading preserves configured sources, history, service identity, startup state
 and active clock ownership. Existing installations retain their directory and
 internal service/data names for compatibility. An upgrade never silently hands
@@ -40,6 +58,8 @@ New installations use NTS-required sources from three providers:
 [Netnod](https://www.netnod.se/nts/network-time-security), and
 [DFM](https://dfm.dk/ntp/). Change these in Settings for your location or network.
 The defaults are not copied over an existing installation's settings.
+
+<p align="center"><img src="docs/images/sources.png" width="760" alt="Settings, Time sources page"><br><sub>Settings &gt; Time sources</sub></p>
 
 NTS uses verified TLS 1.3 key exchange and authenticated NTP replies. An NTS-required
 source never silently falls back to plain NTP. Certificates require a reasonably
@@ -63,6 +83,8 @@ Graphs and comparisons read recent and compressed records transparently. Source
 comparison exports CSV/JSON summaries; full-history exports are `samples.json.gz`,
 `decisions.json.gz` and `events.json.gz`. Exported files are managed by the user.
 Normal logs avoid repeated full snapshots; detailed diagnostics use more space.
+
+<p align="center"><img src="docs/images/comparison.png" width="760" alt="Source comparison page"><br><sub>Source comparison over the last seven days</sub></p>
 
 Settings changes preserve ownership and test changed sources before restarting.
 Failed source checks leave the running collector untouched. Failed updates restore
