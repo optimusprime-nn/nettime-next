@@ -9,7 +9,7 @@ use std::{
     io::{Read, Write},
     net::{TcpStream, ToSocketAddrs},
     sync::Arc,
-    time::Duration,
+    time::{Duration, Instant},
 };
 use zeroize::Zeroizing;
 const UID: u16 = 0x104;
@@ -46,6 +46,49 @@ fn fields(data: &[u8], mut pos: usize) -> Result<Vec<(u16, &[u8], usize)>> {
         pos += n;
     }
     Ok(out)
+}
+/// A key-exchange socket whose reads and writes share one deadline. The socket
+/// timeout restarts with every byte received, so a peer (or anyone on the path,
+/// before the certificate is checked) trickling bytes could otherwise hold the
+/// exchange, and the whole polling round waiting on it, open for hours.
+struct Deadline {
+    socket: TcpStream,
+    until: Instant,
+}
+/// A socket timeout is the deadline running out; report it as such.
+fn expired(e: std::io::Error) -> std::io::Error {
+    match e.kind() {
+        std::io::ErrorKind::TimedOut | std::io::ErrorKind::WouldBlock => {
+            std::io::Error::new(std::io::ErrorKind::TimedOut, "NTS-KE deadline exceeded")
+        }
+        _ => e,
+    }
+}
+impl Deadline {
+    fn remaining(&self) -> std::io::Result<Duration> {
+        let left = self.until.saturating_duration_since(Instant::now());
+        if left.is_zero() {
+            return Err(expired(std::io::ErrorKind::TimedOut.into()));
+        }
+        Ok(left)
+    }
+}
+impl Read for Deadline {
+    fn read(&mut self, buf: &mut [u8]) -> std::io::Result<usize> {
+        self.socket.set_read_timeout(Some(self.remaining()?))?;
+        let read = self.socket.read(buf);
+        read.map_err(expired)
+    }
+}
+impl Write for Deadline {
+    fn write(&mut self, buf: &[u8]) -> std::io::Result<usize> {
+        self.socket.set_write_timeout(Some(self.remaining()?))?;
+        let written = self.socket.write(buf);
+        written.map_err(expired)
+    }
+    fn flush(&mut self) -> std::io::Result<()> {
+        self.socket.flush()
+    }
 }
 pub struct Session {
     pub host: String,
@@ -162,8 +205,12 @@ fn establish(server: &Server, timeout: f64) -> Result<Session> {
         }
     }
     let (endpoint, socket) = connected.ok_or(last)?;
-    socket.set_read_timeout(Some(Duration::from_secs_f64(timeout)))?;
-    socket.set_write_timeout(Some(Duration::from_secs_f64(timeout)))?;
+    // The TLS handshake and the key-exchange records take at least two round
+    // trips, so together they get twice the per-request timeout.
+    let socket = Deadline {
+        socket,
+        until: Instant::now() + Duration::from_secs_f64(2. * timeout),
+    };
     let roots = RootCertStore::from_iter(webpki_roots::TLS_SERVER_ROOTS.iter().cloned());
     let mut cfg = ClientConfig::builder_with_protocol_versions(&[&rustls::version::TLS13])
         .with_root_certificates(roots)
@@ -378,5 +425,36 @@ mod tests {
     fn rejects_truncated_and_misaligned_extensions() {
         assert!(fields(&[1, 4, 0, 8, 0], 0).is_err());
         assert!(fields(&[1, 4, 0, 5, 0], 0).is_err());
+    }
+    #[test]
+    fn trickling_key_exchange_peer_cannot_outlast_the_deadline() {
+        // Announces a 16 KiB TLS record, then sends one byte of it well inside
+        // the read timeout, which kept the exchange open for hours.
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let port = listener.local_addr().unwrap().port();
+        std::thread::spawn(move || {
+            let (mut s, _) = listener.accept().unwrap();
+            let _ = s.write_all(&[0x16, 0x03, 0x03, 0x40, 0x00]);
+            for _ in 0..0x4000 {
+                std::thread::sleep(Duration::from_millis(50));
+                if s.write_all(&[0]).is_err() {
+                    break;
+                }
+            }
+        });
+        let server = Server {
+            host: "127.0.0.1".into(),
+            nts_ke_port: port,
+            security: "nts_required".into(),
+            ..Default::default()
+        };
+        let started = Instant::now();
+        let error = establish(&server, 0.25).err().expect("exchange must fail");
+        assert!(
+            started.elapsed() < Duration::from_secs(2),
+            "{:?}",
+            started.elapsed()
+        );
+        assert!(format!("{error:#}").contains("deadline"), "{error:#}");
     }
 }
