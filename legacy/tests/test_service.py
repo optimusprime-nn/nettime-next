@@ -11,7 +11,7 @@ import service_control
 from monitor import Monitor, validate_config
 from storage import Store
 
-TEST_ROOT = Path(__file__).resolve().parent / "work" / "tests"
+TEST_ROOT = Path(__file__).resolve().parents[2] / "work" / "tests"
 TEST_ROOT.mkdir(parents=True, exist_ok=True)
 
 

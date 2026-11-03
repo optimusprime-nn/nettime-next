@@ -8,7 +8,7 @@ from ui_dpi import DpiLayout, diagnostics, enable_dpi_awareness
 
 class ManifestTests(unittest.TestCase):
     def test_desktop_manifest_requests_native_dpi_without_elevation(self):
-        manifest = ET.parse(Path(__file__).parent / "desktop.manifest")
+        manifest = ET.parse(Path(__file__).resolve().parents[2] / "assets" / "desktop.manifest")
         self.assertEqual(manifest.find(".//{http://schemas.microsoft.com/SMI/2016/WindowsSettings}dpiAwareness").text, "PerMonitorV2")
         self.assertEqual(manifest.find(".//{http://schemas.microsoft.com/SMI/2005/WindowsSettings}dpiAware").text, "true/pm")
         level = manifest.find(".//{urn:schemas-microsoft-com:asm.v3}requestedExecutionLevel")

@@ -2,9 +2,9 @@ name: Windows release checks
 on:
   workflow_dispatch:
   push:
-    paths: ['native/**', '.github/workflows/rust.yml', 'desktop.manifest', 'nettime.ico']
+    paths: ['native/**', '.github/workflows/rust.yml', 'assets/**']
   pull_request:
-    paths: ['native/**', '.github/workflows/rust.yml', 'desktop.manifest', 'nettime.ico']
+    paths: ['native/**', '.github/workflows/rust.yml', 'assets/**']
 permissions:
   contents: read
 jobs:

@@ -12,6 +12,7 @@ from pathlib import Path
 from runtime_paths import VERSION
 
 ROOT = Path(__file__).resolve().parent
+ASSETS = ROOT.parent / "assets"
 
 
 def run(*command):
@@ -26,7 +27,7 @@ def main():
     if os.name != "nt":
         raise SystemExit("Build Windows executables on Windows")
     if not args.skip_tests:
-        run(sys.executable, "-m", "unittest", "discover", "-s", ".", "-p", "test_*.py", "-v")
+        run(sys.executable, "-m", "unittest", "discover", "-s", "tests", "-t", ".", "-p", "test_*.py", "-v")
     version_file = ROOT / "build" / "windows-version.txt"
     version_file.parent.mkdir(exist_ok=True)
     components = tuple(int(v) for v in VERSION.split(".")) + (0,)
@@ -40,9 +41,9 @@ def main():
         StringStruct('ProductVersion', '{VERSION}.0')])]),
         VarFileInfo([VarStruct('Translation', [1033,1200])])])''', encoding="utf-8")
     common = [sys.executable, "-m", "PyInstaller", "--noconfirm", "--clean", "--noupx", "--onedir",
-              "--add-data", "settings.example.json;.", "--add-data", "nettime.ico;.",
-              "--icon", ROOT / 'nettime.ico', "--version-file", str(version_file)]
-    run(*common, "--name", "NetTimeNext", "--windowed", "--manifest", ROOT / "desktop.manifest", "app.py")
+              "--add-data", "settings.example.json;.", "--add-data", f"{ASSETS / 'nettime.ico'};.",
+              "--icon", ASSETS / 'nettime.ico', "--version-file", str(version_file)]
+    run(*common, "--name", "NetTimeNext", "--windowed", "--manifest", ASSETS / "desktop.manifest", "app.py")
     from PyInstaller.utils.win32.winmanifest import read_manifest_from_executable
     import xml.etree.ElementTree as ET
     embedded = ET.fromstring(read_manifest_from_executable(str(ROOT / "dist" / "NetTimeNext" / "NetTimeNext.exe")))

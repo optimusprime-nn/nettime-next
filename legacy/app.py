@@ -14,7 +14,7 @@ from types import SimpleNamespace
 
 from monitor import BASE, InstanceLock, Monitor, load_config
 from storage import Store
-from runtime_paths import VERSION, machine_root, RESOURCE_DIR
+from runtime_paths import VERSION, machine_root, ICON_FILE
 from selection import Peer
 
 
@@ -62,7 +62,7 @@ def gui(cfg, store, smoke=False, config_path=BASE / "settings.json", service_vie
         import ctypes
         ctypes.windll.shell32.SetCurrentProcessExplicitAppUserModelID('NetTimeNext.Desktop')
     root = tk.Tk()
-    root.iconbitmap(str(RESOURCE_DIR / 'nettime.ico'))
+    root.iconbitmap(str(ICON_FILE))
     dpi_layout = DpiLayout(root)
     root.title(f"NetTime Next {VERSION} · {'Windows service' if service_view else 'Standalone'} observer")
     dpi_layout.size_window(root, 1430, 830, 1060, 680)

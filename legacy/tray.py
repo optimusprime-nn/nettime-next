@@ -3,7 +3,7 @@ import os
 import queue
 import threading
 
-from runtime_paths import RESOURCE_DIR
+from runtime_paths import ICON_FILE
 
 
 class TrayIcon:
@@ -78,7 +78,7 @@ class TrayIcon:
             wc.hInstance, wc.lpszClassName, wc.lpfnWndProc = instance, name, handle
             win32gui.RegisterClass(wc)
             self.hwnd = win32gui.CreateWindow(name, 'NetTime Next tray', 0, 0, 0, 0, 0, 0, 0, instance, None)
-            icon = win32gui.LoadImage(0, str(RESOURCE_DIR / 'nettime.ico'), win32con.IMAGE_ICON,
+            icon = win32gui.LoadImage(0, str(ICON_FILE), win32con.IMAGE_ICON,
                                      win32api.GetSystemMetrics(win32con.SM_CXSMICON),
                                      win32api.GetSystemMetrics(win32con.SM_CYSMICON), win32con.LR_LOADFROMFILE)
             add()

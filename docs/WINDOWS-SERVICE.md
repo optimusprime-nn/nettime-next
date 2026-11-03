@@ -1,5 +1,8 @@
 # Windows service preview 0.3.1
 
+This describes the historical Python implementation in `legacy/`. The
+supported product is the native application in `native/`.
+
 The installer bundles Python and all runtime dependencies. A separate Python
 installation is not required on the destination computer. Windows 10/11 x64 is
 the current build target; ARM64 native builds are not provided.
@@ -51,22 +54,22 @@ evidence remain in ProgramData. This preserves diagnostic data deliberately.
 
 ## Build and verification
 
-Install the exact dependencies in `requirements-build.txt` into a Python 3.11 x64
+Install the exact dependencies in `legacy/requirements-build.txt` into a Python 3.11 x64
 virtual environment, obtain the signed Inno Setup compiler with
 `scripts/Get-InnoSetup.ps1`, then run:
 
 ```text
-python build.py --iscc path-to-ISCC.exe
+python legacy/build.py --iscc path-to-ISCC.exe
 ```
 
 The build runs tests, creates the app/service executables, includes runtime
-license notices and produces `dist/NetTimeNext-0.3.1-Setup-x64.exe`, a checksum and
+license notices and produces `legacy/dist/NetTimeNext-0.3.1-Setup-x64.exe`, a checksum and
 a manifest identifying the source commit. Builds are traceable to source and
 pinned dependencies; byte-for-byte reproducible binaries are not claimed.
 
 The Windows GitHub workflow builds the installer and tests fresh install,
 collection, service stop/start and uninstall with an offline NTS-blocked fixture.
-`scripts/Test-InstalledBuild.ps1` requires administrator rights and refuses to
+`legacy/scripts/Test-InstalledBuild.ps1` requires administrator rights and refuses to
 overwrite an existing observer installation or settings. Its optional
 `-KeepInstalled` is intended for an explicitly requested development deployment.
 

@@ -55,7 +55,7 @@ def main():
         entries.append(struct.pack('<BBBBHHII', size % 256, size % 256, 0, 0, 1, 32, len(block), offset))
         offset += len(block)
     root = Path(__file__).resolve().parents[1]
-    (root / 'nettime.ico').write_bytes(struct.pack('<HHH', 0, 1, len(sizes)) + b''.join(entries) + b''.join(blocks))
+    (root.parent / 'assets' / 'nettime.ico').write_bytes(struct.pack('<HHH', 0, 1, len(sizes)) + b''.join(entries) + b''.join(blocks))
 
 
 if __name__ == '__main__':

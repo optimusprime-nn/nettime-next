@@ -121,3 +121,16 @@ python package.py --iscc C:\path\to\ISCC.exe
 Manual cleanup: `--maintain-history --database FILE --days DAYS` (live installed
 storage needs administrator rights). Cleanup permanently removes expired history.
 The desktop accepts `--tray` to start directly in the notification area.
+
+## Repository layout
+
+| Folder | Contents |
+| --- | --- |
+| `native/` | The supported Rust application, service, installer script and tests |
+| `assets/` | Icon and Windows application manifest shared by the builds |
+| `docs/` | Release notes, reviews and design records |
+| `scripts/` | Build tooling shared by the workflows |
+| `legacy/` | The original Python implementation, kept as a compatibility reference |
+
+User documentation is on the [project site](https://optimusprime-nn.github.io/nettime-next/)
+and the [wiki](https://github.com/optimusprime-nn/nettime-next/wiki).

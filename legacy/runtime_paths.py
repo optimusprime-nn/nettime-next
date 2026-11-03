@@ -7,6 +7,8 @@ VERSION = "0.3.3"
 SERVICE_NAME = "NetTimeNext"
 SERVICE_DISPLAY_NAME = "NetTime Next Observer"
 RESOURCE_DIR = Path(getattr(sys, "_MEIPASS", Path(__file__).resolve().parent))
+# Frozen builds bundle the icon; source runs use the shared copy in assets/.
+ICON_FILE = RESOURCE_DIR / "nettime.ico" if hasattr(sys, "_MEIPASS") else Path(__file__).resolve().parents[1] / "assets" / "nettime.ico"
 
 
 def machine_root():
