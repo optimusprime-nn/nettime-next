@@ -47,6 +47,14 @@ it off again.
   failures, stratum changes and the longest gap. Also a timeline of selection
   changes.
 
+![History graph and selection reason for one source](images/source-detail.png)
+
+*Select a source on the overview to see its history and why it is or isn't selected.*
+
+![Source comparison page with per-source statistics](images/comparison.png)
+
+*Source comparison over the last seven days.*
+
 ## Exporting
 
 From the app, **Export reports** writes to `Documents\NetTime Next Reports`:

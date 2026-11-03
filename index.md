@@ -2,6 +2,8 @@
 layout: default
 title: "NetTime Next"
 ---
+<p align="center"><img src="images/logo.png" width="112" height="112" alt="NetTime Next logo"></p>
+
 # NetTime Next
 
 NetTime Next keeps a Windows PC's clock accurate using several network time
@@ -10,6 +12,10 @@ sources at once, and shows you the evidence for every decision it makes.
 It runs as a native Windows service, with a desktop app and a tray icon for
 watching it. It is a client only: it sets the clock on the PC it runs on and
 does not serve time to other machines.
+
+![The NetTime Next overview, showing six time sources and their measurements](images/overview.png)
+
+*The overview: the current decision, the combined offset and every source's latest result.*
 
 ## What it does
 

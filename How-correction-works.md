@@ -69,6 +69,10 @@ no agreement and correction suspends.
 The **Selection explanations** panel shows the outcome of every step for
 every source.
 
+![A source's offset history and its selection reason](images/source-detail.png)
+
+*Each source's selection reason is shown under its history graph.*
+
 ## 4. Correct
 
 Correction changes the clock's **rate**. It never sets the time directly.

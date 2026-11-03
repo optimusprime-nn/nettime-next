@@ -7,6 +7,10 @@ title: "Settings reference"
 Change settings in the app under **Settings**, then choose **Save and
 apply…**. Saving needs administrator approval.
 
+![Settings page with tabs for each group of settings](images/clock-control.png)
+
+*Settings is split into tabs. Save and apply is at the bottom of each one.*
+
 When you apply settings:
 
 1. the new settings are validated,
@@ -23,6 +27,10 @@ The settings are stored in `C:\ProgramData\NetTimeNextNativePreview\settings.jso
 The JSON key for each setting is shown below for reference.
 
 ## Time sources
+
+![Settings, Time sources page](images/sources.png)
+
+*Settings > Time sources.*
 
 | Setting | Key | Default | Allowed |
 | --- | --- | --- | --- |
@@ -56,6 +64,10 @@ You can have 1–32 sources. The same host and port can't be listed twice.
 
 ## Collection & history
 
+![Settings, Collection and history page](images/collection.png)
+
+*Settings > Collection & history. Check interval, response timeout and maximum source distance are set here too.*
+
 | Setting | Key | Default | Allowed | What it does |
 | --- | --- | --- | --- | --- |
 | Record history and event logs | `logging_enabled` | on | on/off | When off, clock control and live status continue but no history is recorded. |
@@ -66,9 +78,21 @@ Reducing retention deletes older data permanently, so the app asks you to
 confirm (**Save and delete older history…**). Export first if you want to
 keep it; see [History and exports](History-and-exports).
 
+![Confirmation dialog asking before older history is deleted](images/retention.png)
+
+*Reducing retention asks before anything is deleted.*
+
 ## Other settings pages
+
+![Settings, Windows service page](images/service.png)
+
+*Settings > Windows service.*
 
 - **Windows service**: shows the service state and has **Start service…**
   and **Stop service…**.
 - **Appearance**: dark or light theme, and interface size.
 - **System tray**: how minimise and close behave.
+
+![Settings, Appearance page in the light theme](images/appearance-light.png)
+
+*Settings > Appearance, in the light theme.*

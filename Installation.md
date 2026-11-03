@@ -40,6 +40,10 @@ time, see [Taking over the clock](Taking-over-the-clock).
 
 ## The desktop app and tray
 
+![The NetTime Next desktop app](images/overview.png)
+
+*The desktop app. The status bar at the bottom shows whether the service is running.*
+
 - **Minimise** keeps the window on the taskbar.
 - **X** hides the window in the notification area. Click the clock icon to
   bring it back.
@@ -56,6 +60,10 @@ After installing, each source needs several measurements before it can be
 used. With the default 64-second check interval, filters usually settle in
 about 8–10 minutes. Until then the overview shows sources as warming up.
 This is expected.
+
+![Overview status shortly after the first start, waiting for source groups](images/warming-up.png)
+
+*Straight after the first start, before the filters have settled.*
 
 ## Upgrade
 

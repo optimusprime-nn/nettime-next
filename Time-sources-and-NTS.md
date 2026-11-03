@@ -21,6 +21,10 @@ already configured.
 
 ## Adding a source
 
+![Settings, Time sources page listing six sources](images/sources.png)
+
+*Settings > Time sources: four NTS-required sources and two plain NTP sources, each in its own group.*
+
 Each source has:
 
 - **Server name**: a host name or IP address.

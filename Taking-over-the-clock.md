@@ -31,6 +31,10 @@ Check these on the **Overview** page:
 Open **Settings > Clock control** and choose **Take over clock…**, then
 approve the administrator prompt.
 
+![Settings, Clock control page with the Take over clock button](images/clock-control.png)
+
+*Settings > Clock control, in measurement mode.*
+
 Takeover is done as one recorded transaction:
 
 1. The current state of the other clock services is saved to an ownership
@@ -73,6 +77,10 @@ From the command line, as administrator:
 ```
 
 ## What the overview states mean
+
+![Overview status card with the measurement-only badge](images/status.png)
+
+*The state badges appear at the top of the overview.*
 
 | State | Meaning |
 | --- | --- |

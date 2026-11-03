@@ -1,22 +1,31 @@
+/* Colours follow the desktop app's own theme (native/src/desktop/style.rs). */
 :root {
-  --bg: #fbfbfa;
-  --panel: #f2f2ef;
-  --text: #1d1f21;
-  --muted: #5d636a;
-  --line: #dcdcd6;
-  --accent: #0b6e69;
-  --code-bg: #ececE7;
+  --bg: #f4f6fa;
+  --panel: #ffffff;
+  --card: #ffffff;
+  --raised: #e9eef5;
+  --text: #18202b;
+  --muted: #566273;
+  --line: #d6dde8;
+  --accent: #2a6fb8;
+  --accent-soft: rgba(42, 111, 184, 0.12);
+  --green: #1f8a6d;
+  --code-bg: #eaeff6;
   color-scheme: light;
 }
 @media (prefers-color-scheme: dark) {
   :root {
-    --bg: #121416;
-    --panel: #1a1d20;
-    --text: #e4e6e8;
-    --muted: #9aa1a8;
-    --line: #2c3035;
-    --accent: #4fc1b9;
-    --code-bg: #1f2327;
+    --bg: #0f151f;
+    --panel: #0c121b;
+    --card: #171f2c;
+    --raised: #202c3d;
+    --text: #dde5f2;
+    --muted: #8f9bb0;
+    --line: #26344a;
+    --accent: #5ba9ff;
+    --accent-soft: rgba(91, 169, 255, 0.14);
+    --green: #3ccca4;
+    --code-bg: #1c2635;
     color-scheme: dark;
   }
 }
@@ -26,7 +35,7 @@ body {
   margin: 0;
   background: var(--bg);
   color: var(--text);
-  font: 16px/1.6 system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+  font: 16px/1.6 "Segoe UI", system-ui, -apple-system, Roboto, sans-serif;
 }
 a { color: var(--accent); }
 .top {
@@ -34,7 +43,7 @@ a { color: var(--accent); }
   align-items: center;
   justify-content: space-between;
   gap: 16px;
-  padding: 12px 24px;
+  padding: 10px 24px;
   border-bottom: 1px solid var(--line);
   background: var(--panel);
 }
@@ -44,37 +53,36 @@ a { color: var(--accent); }
   gap: 10px;
   color: var(--text);
   font-weight: 650;
+  font-size: 17px;
   text-decoration: none;
-  letter-spacing: 0.01em;
 }
-.mark {
-  width: 18px;
-  height: 18px;
-  border: 2px solid var(--accent);
-  border-radius: 50%;
-  position: relative;
+.brand img { width: 30px; height: 30px; display: block; }
+.version {
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--green);
+  border: 1px solid var(--line);
+  border-radius: 999px;
+  padding: 1px 8px;
 }
-.mark::after {
-  content: "";
-  position: absolute;
-  left: 6px;
-  top: 2px;
-  width: 2px;
-  height: 6px;
-  background: var(--accent);
-  transform-origin: bottom;
+.top-links { display: flex; gap: 8px; font-size: 14px; }
+.top-links a {
+  text-decoration: none;
+  color: var(--text);
+  background: var(--raised);
+  border-radius: 6px;
+  padding: 5px 12px;
 }
-.top-links { display: flex; gap: 18px; font-size: 15px; }
-.top-links a { text-decoration: none; }
+.top-links a.primary { background: var(--accent); color: #fff; }
+@media (prefers-color-scheme: dark) { .top-links a.primary { color: #0c121b; } }
 .shell {
   display: grid;
   grid-template-columns: 240px minmax(0, 1fr);
-  max-width: 1120px;
+  max-width: 1180px;
   margin: 0 auto;
 }
 .side {
-  padding: 24px 16px 24px 24px;
-  border-right: 1px solid var(--line);
+  padding: 20px 14px 24px 20px;
   position: sticky;
   top: 0;
   align-self: start;
@@ -82,7 +90,7 @@ a { color: var(--accent); }
   overflow: auto;
 }
 .side-head {
-  margin: 18px 0 6px;
+  margin: 18px 0 6px 8px;
   font-size: 12px;
   font-weight: 650;
   text-transform: uppercase;
@@ -93,18 +101,34 @@ a { color: var(--accent); }
 .side ul { list-style: none; margin: 0; padding: 0; }
 .side a {
   display: block;
-  padding: 4px 8px;
+  padding: 5px 10px;
   border-radius: 6px;
   color: var(--text);
   text-decoration: none;
   font-size: 15px;
 }
-.side a:hover { background: var(--panel); }
-.side a[aria-current="page"] { background: var(--panel); color: var(--accent); font-weight: 600; }
-.content { padding: 24px 32px 48px; min-width: 0; }
-.content h1 { font-size: 2rem; line-height: 1.25; margin: 0.2em 0 0.6em; }
-.content h2 { font-size: 1.35rem; margin-top: 2em; padding-top: 0.4em; border-top: 1px solid var(--line); }
+.side a:hover { background: var(--raised); }
+.side a[aria-current="page"] { background: var(--accent-soft); color: var(--accent); font-weight: 600; }
+.content {
+  margin: 20px 24px 48px 8px;
+  padding: 24px 32px 32px;
+  min-width: 0;
+  background: var(--card);
+  border: 1px solid var(--line);
+  border-radius: 10px;
+}
+.content h1 { font-size: 2rem; line-height: 1.25; margin: 0.1em 0 0.6em; }
+.content h2 { font-size: 1.35rem; margin-top: 2em; padding-top: 0.5em; border-top: 1px solid var(--line); }
 .content h3 { font-size: 1.1rem; margin-top: 1.6em; }
+.content img { max-width: 100%; height: auto; }
+.content p > img:only-child, .shot {
+  display: block;
+  margin: 1.2em 0 0.4em;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  box-shadow: 0 6px 24px rgba(0, 0, 0, 0.18);
+}
+.content em:only-child { color: var(--muted); font-size: 14px; }
 .content code {
   font: 0.9em/1.4 ui-monospace, "Cascadia Code", Consolas, monospace;
   background: var(--code-bg);
@@ -114,6 +138,7 @@ a { color: var(--accent); }
 }
 .content pre {
   background: var(--code-bg);
+  border: 1px solid var(--line);
   padding: 12px 14px;
   border-radius: 8px;
   overflow-x: auto;
@@ -127,19 +152,30 @@ a { color: var(--accent); }
   font-size: 15px;
 }
 .content th, .content td { border: 1px solid var(--line); padding: 6px 10px; text-align: left; vertical-align: top; }
-.content th { background: var(--panel); }
+.content th { background: var(--raised); }
+.hero {
+  display: flex;
+  align-items: center;
+  gap: 20px;
+  margin-bottom: 8px;
+}
+.hero img { width: 88px; height: 88px; flex: none; }
+.hero h1 { margin: 0; }
+.hero p { margin: 4px 0 0; color: var(--muted); }
 .foot { margin-top: 48px; padding-top: 16px; border-top: 1px solid var(--line); color: var(--muted); font-size: 14px; }
 @media (max-width: 760px) {
-  .top { padding: 12px 16px; }
+  .top { padding: 10px 16px; }
+  .top-links a:not(.primary) { display: none; }
   .shell { display: block; }
   .side {
     position: static;
     max-height: none;
-    border-right: 0;
     border-bottom: 1px solid var(--line);
     padding: 12px 16px;
   }
   .side ul { display: flex; flex-wrap: wrap; gap: 2px 4px; }
-  .content { padding: 16px 16px 40px; }
+  .content { margin: 12px 0 32px; padding: 16px; border-left: 0; border-right: 0; border-radius: 0; }
   .content h1 { font-size: 1.6rem; }
+  .hero img { width: 60px; height: 60px; }
 }
+.content img[alt="NetTime Next logo"] { border: 0; box-shadow: none; margin: 0 auto; }

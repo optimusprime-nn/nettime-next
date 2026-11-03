@@ -15,6 +15,10 @@ a reason for every source that isn't selected. For anything else, check:
 
 ## "Need 3 eligible source groups; currently 0"
 
+![Overview reporting Need 3 eligible source groups; currently 0](images/warming-up.png)
+
+*How this looks on the overview.*
+
 Shortly after a start, restart, upgrade or settings change, this is normal.
 Each source needs about four fresh samples, which takes 8–10 minutes at the
 default 64-second interval.
