@@ -127,10 +127,13 @@ The desktop accepts `--tray` to start directly in the notification area.
 | Folder | Contents |
 | --- | --- |
 | `native/` | The supported Rust application, service, installer script and tests |
-| `assets/` | Icon and Windows application manifest shared by the builds |
+| `assets/` | Icon and Windows application manifest used by the native build |
 | `docs/` | Release notes, reviews and design records |
-| `scripts/` | Build tooling shared by the workflows |
-| `legacy/` | The original Python implementation, kept as a compatibility reference |
+| `scripts/` | Build tooling used by the workflows |
+
+The original Python implementation (0.2–0.3) was retired from `main`. Its
+source is preserved at the [`legacy-final`](https://github.com/optimusprime-nn/nettime-next/tree/legacy-final)
+tag.
 
 User documentation is on the [project site](https://optimusprime-nn.github.io/nettime-next/)
 and the [wiki](https://github.com/optimusprime-nn/nettime-next/wiki).

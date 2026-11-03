@@ -1,6 +1,7 @@
 # Windows service preview 0.3.1
 
-This describes the historical Python implementation in `legacy/`. The
+This describes the retired Python implementation. Its source, and the
+`legacy/` paths below, are preserved at the `legacy-final` tag. The
 supported product is the native application in `native/`.
 
 The installer bundles Python and all runtime dependencies. A separate Python
