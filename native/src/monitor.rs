@@ -36,6 +36,15 @@ pub struct Monitor {
     // Cycles dropped from a full queue: count, samples, first and last utc.
     lost: Option<(usize, usize, f64, f64)>,
     max_unsaved_cycles: usize,
+    in_flight: Vec<InFlight>,
+    stop: Arc<AtomicBool>,
+}
+/// A source query still running. It holds the source's NTS client; `state` is
+/// the client's backoff (failures, retry time) for saving meanwhile.
+struct InFlight {
+    peer: usize,
+    state: (u32, f64),
+    worker: thread::JoinHandle<(Sample, crate::nts::NtsClient)>,
 }
 /// Bounds on what is held in memory while the database stays locked
 /// (1024 cycles is about 18 hours at the shortest poll).
@@ -90,6 +99,8 @@ impl Monitor {
             blocked_since: None,
             lost: None,
             max_unsaved_cycles: MAX_UNSAVED_CYCLES,
+            in_flight: Vec::new(),
+            stop: Arc::new(AtomicBool::new(false)),
         })
     }
     pub fn for_service(cfg: Config, store: Store, root: &std::path::Path) -> Result<Self> {
@@ -163,25 +174,51 @@ impl Monitor {
         self.last_wall = wall;
         self.last_mono = now;
         let timeout = self.cfg.timeout_seconds;
-        let samples = thread::scope(|scope| {
-            let workers: Vec<_> = self
-                .peers
-                .iter_mut()
-                .filter(|p| p.disabled.is_empty() && now >= p.next_due)
-                .map(|p| {
-                    scope.spawn(move || {
-                        let sample = protocol::query(&p.server, timeout, p.interval, &mut p.nts);
-                        p.accept(sample.clone());
-                        p.next_due = mono() + p.interval;
-                        sample
-                    })
-                })
-                .collect();
-            workers
-                .into_iter()
-                .map(|w| w.join().map_err(|_| anyhow::anyhow!("NTP worker panicked")))
-                .collect::<Result<Vec<_>>>()
-        })?;
+        for (index, p) in self.peers.iter_mut().enumerate() {
+            if !p.disabled.is_empty()
+                || now < p.next_due
+                || self.in_flight.iter().any(|f| f.peer == index)
+            {
+                continue;
+            }
+            let (server, interval) = (p.server.clone(), p.interval);
+            let mut nts = std::mem::take(&mut p.nts);
+            self.in_flight.push(InFlight {
+                peer: index,
+                state: (nts.failures, nts.retry_at),
+                worker: thread::spawn(move || {
+                    let sample = protocol::query(&server, timeout, interval, &mut nts);
+                    (sample, nts)
+                }),
+            });
+        }
+        // Wait for the queries, but not past twice the request timeout. A source
+        // still answering is collected in a later round instead of holding back
+        // every other source's result, or a service stop.
+        let until = mono() + 2. * timeout;
+        while self.in_flight.iter().any(|f| !f.worker.is_finished())
+            && mono() < until
+            && !self.stop.load(Ordering::Relaxed)
+        {
+            thread::sleep(Duration::from_millis(10));
+        }
+        let (mut done, running): (Vec<_>, Vec<_>) = std::mem::take(&mut self.in_flight)
+            .into_iter()
+            .partition(|f| f.worker.is_finished());
+        self.in_flight = running;
+        done.sort_by_key(|f| f.peer);
+        let mut samples = Vec::with_capacity(done.len());
+        for f in done {
+            let (sample, nts) = f
+                .worker
+                .join()
+                .map_err(|_| anyhow::anyhow!("NTP worker panicked"))?;
+            let p = &mut self.peers[f.peer];
+            p.nts = nts;
+            p.accept(sample.clone());
+            p.next_due = mono() + p.interval;
+            samples.push(sample);
+        }
         if samples.is_empty() {
             return Ok(None);
         }
@@ -222,7 +259,14 @@ impl Monitor {
             servers.insert(p.server.key(), v);
         }
         let decision = json!({"utc":utc(),"collector_instance":self.instance,"policy":"native-service-v2","selected":assessment.selected,"confidence":"Source agreement; independence depends on configured groups","explanation":assessment.explanation,"synchronization":assessment,"servers":servers,"clock_action":clock_action});
-        let states=self.peers.iter().map(|p|(p.server.key(),json!({"interval":p.interval,"disabled":p.disabled,"reach":p.reach,"next_utc":utc()+(p.next_due-mono()).max(0.),"nts_failures":p.nts.failures,"nts_retry_utc":utc()+(p.nts.retry_at-mono()).max(0.)}))).collect::<Vec<_>>();
+        let states = self.peers.iter().enumerate().map(|(index, p)| {
+            let (failures, retry_at) = self
+                .in_flight
+                .iter()
+                .find(|f| f.peer == index)
+                .map_or((p.nts.failures, p.nts.retry_at), |f| f.state);
+            (p.server.key(), json!({"interval":p.interval,"disabled":p.disabled,"reach":p.reach,"next_utc":utc()+(p.next_due-mono()).max(0.),"nts_failures":failures,"nts_retry_utc":utc()+(retry_at-mono()).max(0.)}))
+        }).collect::<Vec<_>>();
         self.persist(samples, &decision, &states)?;
         Ok(Some(decision))
     }
@@ -311,6 +355,8 @@ impl Monitor {
         }
     }
     pub fn run(&mut self, stop: Arc<AtomicBool>) -> Result<()> {
+        // Queries still running at a stop are abandoned with the process.
+        self.stop = stop.clone();
         let mode = self.cfg.clock.mode.clone();
         self.record(
             "native_collector_started",
@@ -394,6 +440,75 @@ mod tests {
         assert!(monitor.events[0].2.get("lost_cycles").is_none());
         drop((reader, monitor));
         std::fs::remove_dir_all(root).unwrap();
+    }
+    #[test]
+    fn slow_source_does_not_hold_back_the_round() {
+        use crate::config::Server;
+        use std::io::Write;
+        // A plain NTP source on loopback that answers every request.
+        let udp = std::net::UdpSocket::bind("127.0.0.1:0").unwrap();
+        let udp_port = udp.local_addr().unwrap().port();
+        thread::spawn(move || {
+            let mut request = [0u8; 1024];
+            while let Ok((_, client)) = udp.recv_from(&mut request) {
+                let now = protocol::encode(utc());
+                let mut reply = [0u8; 48];
+                reply[0] = 0x24;
+                reply[1] = 2;
+                reply[16..24].copy_from_slice(&protocol::encode(utc() - 1.));
+                reply[24..32].copy_from_slice(&request[40..48]);
+                reply[32..40].copy_from_slice(&now);
+                reply[40..48].copy_from_slice(&now);
+                let _ = udp.send_to(&reply, client);
+            }
+        });
+        // An NTS-KE peer that trickles a TLS record until the deadline.
+        let tcp = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let tcp_port = tcp.local_addr().unwrap().port();
+        thread::spawn(move || {
+            for mut s in tcp.incoming().flatten() {
+                thread::spawn(move || {
+                    let _ = s.write_all(&[0x16, 0x03, 0x03, 0x40, 0x00]);
+                    while s.write_all(&[0]).is_ok() {
+                        thread::sleep(Duration::from_millis(50));
+                    }
+                });
+            }
+        });
+        let cfg = Config {
+            timeout_seconds: 1.,
+            servers: vec![
+                Server {
+                    host: "127.0.0.1".into(),
+                    nts_ke_port: tcp_port,
+                    security: "nts_required".into(),
+                    ..Default::default()
+                },
+                Server {
+                    host: "127.0.0.1".into(),
+                    port: udp_port,
+                    ..Default::default()
+                },
+            ],
+            ..Default::default()
+        };
+        let store = Store::open(std::path::Path::new(":memory:"), false).unwrap();
+        let mut monitor = Monitor::new(cfg, store).unwrap();
+        // The key exchange may take up to 3 s; the round waits at most 2 s.
+        let started = std::time::Instant::now();
+        assert!(monitor.collect().unwrap().is_some());
+        assert!(started.elapsed() < Duration::from_millis(2800));
+        assert_eq!(monitor.peers[1].latest.as_ref().unwrap().status, "valid");
+        assert!(monitor.peers[0].latest.is_none());
+        assert_eq!(monitor.in_flight.len(), 1);
+        // The slow source's outcome is collected by a later round, with its
+        // NTS client (and the failure it counted) handed back.
+        thread::sleep(Duration::from_millis(1500));
+        assert!(monitor.collect().unwrap().is_some());
+        assert!(monitor.in_flight.is_empty());
+        let late = monitor.peers[0].latest.as_ref().unwrap();
+        assert!(late.reason.contains("deadline"), "{}", late.reason);
+        assert_eq!(monitor.peers[0].nts.failures, 1);
     }
     #[test]
     fn repeated_maintenance_problems_are_logged_once() {

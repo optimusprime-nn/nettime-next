@@ -2,7 +2,7 @@ use crate::{config::Server, nts::NtsClient};
 use anyhow::{Result, bail, ensure};
 use serde::{Deserialize, Serialize};
 use std::{
-    net::{ToSocketAddrs, UdpSocket},
+    net::{SocketAddr, ToSocketAddrs, UdpSocket},
     sync::OnceLock,
     time::{Duration, Instant, SystemTime, UNIX_EPOCH},
 };
@@ -148,6 +148,29 @@ pub fn parse(raw: &[u8], stamp: &[u8], s: &mut Sample) -> Result<()> {
     .into();
     Ok(())
 }
+/// Resolves a host name within `timeout`. The system resolver cannot be
+/// cancelled, so a lookup that outlasts the timeout finishes on its own thread
+/// and its result is discarded; the poll fails instead of waiting for it.
+pub fn resolve(host: &str, port: u16, timeout: f64) -> Result<Vec<SocketAddr>> {
+    if let Ok(ip) = host.parse::<std::net::IpAddr>() {
+        return Ok(vec![SocketAddr::new(ip, port)]);
+    }
+    let host = host.to_owned();
+    resolve_with(timeout, move || {
+        Ok((host.as_str(), port).to_socket_addrs()?.collect())
+    })
+}
+fn resolve_with(
+    timeout: f64,
+    lookup: impl FnOnce() -> Result<Vec<SocketAddr>> + Send + 'static,
+) -> Result<Vec<SocketAddr>> {
+    let (tx, rx) = std::sync::mpsc::channel();
+    std::thread::spawn(move || {
+        let _ = tx.send(lookup());
+    });
+    rx.recv_timeout(Duration::from_secs_f64(timeout))
+        .map_err(|_| anyhow::anyhow!("Name resolution timed out"))?
+}
 /// The request's transmit timestamp, which the reply must echo. Its low 24
 /// fraction bits (under 4 ms) are random, so an off-path attacker cannot guess
 /// it from the send time; with only 8 random bits a spoofed plain-NTP reply
@@ -187,7 +210,7 @@ pub fn query(server: &Server, timeout: f64, poll: f64, client: &mut NtsClient) -
         } else {
             (server.host.clone(), server.port)
         };
-        let addresses: Vec<_> = (host.as_str(), port).to_socket_addrs()?.collect();
+        let addresses = resolve(&host, port, timeout)?;
         let endpoint = *addresses
             .get(client.address_cursor % addresses.len().max(1))
             .ok_or_else(|| anyhow::anyhow!("No resolved address"))?;
@@ -310,6 +333,19 @@ pub fn query(server: &Server, timeout: f64, poll: f64, client: &mut NtsClient) -
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn slow_name_resolution_fails_within_the_timeout() {
+        let started = Instant::now();
+        let error = resolve_with(0.2, || {
+            std::thread::sleep(Duration::from_secs(5));
+            Ok(vec![])
+        })
+        .unwrap_err();
+        assert!(started.elapsed() < Duration::from_secs(2));
+        assert_eq!(error.to_string(), "Name resolution timed out");
+        let literal = resolve("192.0.2.1", 123, 0.2).unwrap();
+        assert_eq!(literal, ["192.0.2.1:123".parse::<SocketAddr>().unwrap()]);
+    }
     #[test]
     fn era_round_trip() {
         for t in [0., 1730000000.125, 2085978497.5, 4100000000.25] {

@@ -7,7 +7,7 @@ use sha2::{Digest, Sha256};
 use std::{
     collections::{HashMap, VecDeque},
     io::{Read, Write},
-    net::{TcpStream, ToSocketAddrs},
+    net::TcpStream,
     sync::Arc,
     time::{Duration, Instant},
 };
@@ -191,12 +191,22 @@ impl Session {
     }
 }
 fn establish(server: &Server, timeout: f64) -> Result<Session> {
+    // Name resolution, connection, the TLS handshake and the key-exchange
+    // records take at least three round trips; together they get three times
+    // the per-request timeout, and no step may wait past that deadline.
+    let until = Instant::now() + Duration::from_secs_f64(3. * timeout);
+    let left = || until.saturating_duration_since(Instant::now());
     // Try each resolved address in turn; one unreachable address (for example
     // IPv6 without a route) must not block key establishment.
     let mut last = anyhow::anyhow!("No NTS-KE address");
     let mut connected = None;
-    for address in (server.host.as_str(), server.nts_ke_port).to_socket_addrs()? {
-        match TcpStream::connect_timeout(&address, Duration::from_secs_f64(timeout)) {
+    for address in crate::protocol::resolve(&server.host, server.nts_ke_port, timeout)? {
+        let wait = left().min(Duration::from_secs_f64(timeout));
+        if wait.is_zero() {
+            last = anyhow::anyhow!("NTS-KE deadline exceeded");
+            break;
+        }
+        match TcpStream::connect_timeout(&address, wait) {
             Ok(socket) => {
                 connected = Some((address, socket));
                 break;
@@ -205,12 +215,7 @@ fn establish(server: &Server, timeout: f64) -> Result<Session> {
         }
     }
     let (endpoint, socket) = connected.ok_or(last)?;
-    // The TLS handshake and the key-exchange records take at least two round
-    // trips, so together they get twice the per-request timeout.
-    let socket = Deadline {
-        socket,
-        until: Instant::now() + Duration::from_secs_f64(2. * timeout),
-    };
+    let socket = Deadline { socket, until };
     let roots = RootCertStore::from_iter(webpki_roots::TLS_SERVER_ROOTS.iter().cloned());
     let mut cfg = ClientConfig::builder_with_protocol_versions(&[&rustls::version::TLS13])
         .with_root_certificates(roots)
