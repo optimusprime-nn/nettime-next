@@ -62,7 +62,7 @@ Test names refer to `#[test]` functions in the named source file, or in
 | Negotiated NTPv4 server and port records | §4.1.7, §4.1.8 | Done | `nts.rs` `establish` | None |
 | Overall NTS-KE time limit | §4 (operational) | Done | `nts.rs` `Deadline` | `nts.rs` `trickling_key_exchange_peer_cannot_outlast_the_deadline` |
 | Request extensions: unique identifier, cookie, placeholders, authenticator | §5.3–§5.7 | Done | `nts.rs` request build | `protocol.rs` `live_nts_session_reuse` |
-| Reply verification: one authenticator, matching unique ID, no plaintext cookies, AEAD decrypt | §5.7, §5.8 | Done | `nts.rs` `NtsClient::verify` | **Gap**: no unit tests for tampered, wrong-key, UID-mismatch or plaintext-cookie replies |
+| Reply verification: one authenticator, matching unique ID, no plaintext cookies, AEAD decrypt | §5.7, §5.8 | Done | `nts.rs` `Session::verify` | `nts.rs` `authentic_reply_replenishes_cookies`, `forged_or_malformed_replies_are_rejected_without_taking_cookies` |
 | Extension field framing and length checks | §5.2, RFC 7822 | Done | `nts.rs` `fields` | `nts.rs` `rejects_truncated_and_misaligned_extensions` |
 | Cookie pool (up to 8), single use, replenishment | §5.7, §6 | Done | `nts.rs` | `protocol.rs` `lost_nts_reply_keeps_session_until_repeated`, `live_nts_session_reuse` |
 | Re-key after repeated failures, bounded back-off | §6 (operational) | Done | `nts.rs` (`MAX_MISSES`, `MAX_BACKOFF`) | `protocol.rs` `nts_backoff_is_bounded`, `polls_during_nts_backoff_do_not_extend_it` |
@@ -87,8 +87,7 @@ Test names refer to `#[test]` functions in the named source file, or in
 
 1. Popcorn spike suppressor in the clock filter.
 2. Adaptive poll interval.
-3. Unit tests for NTS reply verification failures (tampered, wrong key, UID
-   mismatch, plaintext cookie) and for NTS-KE record parsing.
+3. Unit tests for NTS-KE record parsing.
 4. Interoperability comparison against an independent client, such as chrony
    tracking the same sources, over at least a day.
 5. Coverage-guided fuzzing of the NTP and NTS parsers. A no-download fuzz pass of

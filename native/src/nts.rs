@@ -426,6 +426,99 @@ mod tests {
             "c7a580e4e580a2955d9661e0d60dce0b"
         );
     }
+    /// A server reply carrying `uid`, then `before` in the clear, then an
+    /// authenticator sealing `plain` with `key` (the server-to-client key).
+    fn reply(uid: &[u8], before: &[u8], plain: &[u8], key: &[u8]) -> Vec<u8> {
+        let mut raw = vec![0; 48];
+        raw[0] = 0x24;
+        raw.extend(extension(UID, uid));
+        raw.extend_from_slice(before);
+        let nonce = [9; 16];
+        let sealed = Aes128Siv::new_from_slice(key)
+            .unwrap()
+            .encrypt([raw.as_slice(), &nonce], plain)
+            .unwrap();
+        let mut body = vec![];
+        body.extend_from_slice(&16u16.to_be_bytes());
+        body.extend_from_slice(&(sealed.len() as u16).to_be_bytes());
+        body.extend_from_slice(&nonce);
+        body.extend(sealed);
+        raw.extend(extension(AUTH, &body));
+        raw
+    }
+    #[test]
+    fn authentic_reply_replenishes_cookies() {
+        let mut session = Session::for_test("server.test", 123, 0);
+        let uid = [4; 32];
+        let cookies = [extension(COOKIE, &[5; 64]), extension(COOKIE, &[6; 64])].concat();
+        session
+            .verify(&reply(&uid, &[], &cookies, &[2; 32]), &uid, 2)
+            .unwrap();
+        assert_eq!(session.cookies.len(), 2);
+        assert_eq!(*session.cookies[1], vec![6; 64]);
+    }
+    #[test]
+    fn forged_or_malformed_replies_are_rejected_without_taking_cookies() {
+        let uid = [4; 32];
+        let cookie = extension(COOKIE, &[5; 64]);
+        let good = reply(&uid, &[], &cookie, &[2; 32]);
+        let mut header_changed = good.clone();
+        header_changed[40] ^= 1;
+        let mut ciphertext_changed = good.clone();
+        *ciphertext_changed.last_mut().unwrap() ^= 1;
+        let mut client_mode = good.clone();
+        client_mode[0] = 0x23;
+        let no_authenticator = good[..48 + 36].to_vec();
+        let mut two_authenticators = good.clone();
+        two_authenticators.extend_from_slice(&good[48 + 36..]);
+        let cases = [
+            (header_changed, "NTS authentication failed"),
+            (ciphertext_changed, "NTS authentication failed"),
+            (
+                reply(&uid, &[], &cookie, &[3; 32]),
+                "NTS authentication failed",
+            ),
+            (
+                reply(&[8; 32], &[], &cookie, &[2; 32]),
+                "unique identifier mismatch",
+            ),
+            (
+                reply(&uid, &cookie, &cookie, &[2; 32]),
+                "Unencrypted cookie",
+            ),
+            (
+                reply(&uid, &extension(PLACEHOLDER, &[0; 64]), &cookie, &[2; 32]),
+                "Unencrypted cookie",
+            ),
+            (client_mode, "NTPv4 server reply"),
+            (no_authenticator, "plaintext fallback forbidden"),
+            (two_authenticators, "plaintext fallback forbidden"),
+            (
+                reply(
+                    &uid,
+                    &[],
+                    &[cookie.clone(), extension(UID, &uid)].concat(),
+                    &[2; 32],
+                ),
+                "Invalid encrypted extension",
+            ),
+            (reply(&uid, &[], &[], &[2; 32]), "replenishment cookies"),
+            (
+                reply(&uid, &[], &cookie.repeat(3), &[2; 32]),
+                "replenishment cookies",
+            ),
+        ];
+        for (raw, expected) in cases {
+            let mut session = Session::for_test("server.test", 123, 1);
+            let error = session.verify(&raw, &uid, 2).unwrap_err();
+            assert!(
+                format!("{error:#}").contains(expected),
+                "{expected}: {error:#}"
+            );
+            assert_eq!(session.cookies.len(), 1, "{expected}");
+            assert_eq!(*session.cookies[0], vec![7; 64], "{expected}");
+        }
+    }
     #[test]
     fn rejects_truncated_and_misaligned_extensions() {
         assert!(fields(&[1, 4, 0, 8, 0], 0).is_err());
