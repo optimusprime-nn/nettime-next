@@ -144,8 +144,21 @@ pub struct Planner {
     /// Sample time of the assessment that last set the clock. Only samples
     /// measured after it can be trusted; this survives `reset`.
     stepped: Option<f64>,
+    /// Frequency estimates made since the planner started or was seeded.
+    estimates: usize,
+    /// The frequency is trustworthy: loaded from disk or learned over
+    /// `LEARNED` estimates. The crystal's drift doesn't change when the clock
+    /// is set or correction pauses, so it survives `reset`.
+    known: bool,
+    /// After the service starts or sets the clock, measurements rebuild for a
+    /// few minutes. Until this monotonic time plus holdover, a known
+    /// frequency is applied meanwhile instead of the neutral rate.
+    holding_since: Option<f64>,
+    saved_at: Option<f64>,
     pub last_good: Option<f64>,
 }
+/// Frequency estimates after which the learned drift is trusted and saved.
+const LEARNED: usize = 16;
 impl Planner {
     pub fn new(options: Clock) -> Self {
         Self {
@@ -158,13 +171,46 @@ impl Planner {
             rate_log: vec![],
             updates: 0,
             stepped: None,
+            estimates: 0,
+            known: false,
+            holding_since: None,
+            saved_at: None,
             last_good: None,
         }
     }
+    /// Starts measurement again. What was learned about the clock is kept.
     pub fn reset(&mut self) {
-        let stepped = self.stepped;
-        *self = Self::new(self.options.clone());
-        self.stepped = stepped;
+        let kept = Self {
+            options: self.options.clone(),
+            stepped: self.stepped,
+            frequency: self.frequency,
+            estimates: self.estimates,
+            known: self.known,
+            holding_since: self.holding_since,
+            saved_at: self.saved_at,
+            ..Self::new(self.options.clone())
+        };
+        *self = kept;
+    }
+    /// Uses a previously learned frequency, as the service starts.
+    pub fn seed(&mut self, frequency: f64, now: f64) -> bool {
+        if !frequency.is_finite() || frequency.abs() > self.options.max_slew_ppm {
+            return false;
+        }
+        self.frequency = frequency;
+        self.known = true;
+        self.holding_since = Some(now);
+        true
+    }
+    /// The frequency to save, once learned, at most hourly while correcting.
+    pub fn drift_to_save(&mut self, now: f64) -> Option<f64> {
+        let due = self.saved_at.is_none_or(|at| now - at >= 3600.);
+        if self.known && self.estimates >= LEARNED && self.updates >= 3 && due {
+            self.saved_at = Some(now);
+            Some(self.frequency)
+        } else {
+            None
+        }
     }
     fn set_rate(&mut self, rate: f64, now: f64) {
         self.rate = rate;
@@ -208,6 +254,27 @@ impl Planner {
             None
         };
         if let Some(reason) = reason {
+            if self.known
+                && self
+                    .holding_since
+                    .is_some_and(|from| now - from <= self.options.holdover_seconds)
+            {
+                // Keep the measured drift rate running until fresh samples
+                // arrive, rather than letting the clock drift freely.
+                self.last_sample = None;
+                self.anchor = None;
+                self.updates = 0;
+                self.last_good = self.holding_since;
+                if self.rate != self.frequency {
+                    self.set_rate(self.frequency, now);
+                }
+                return Plan::new(
+                    "warmup",
+                    self.frequency,
+                    format!("{reason}; holding the learned drift rate"),
+                )
+                .evidence(offset);
+            }
             self.reset();
             return Plan::new("suspend", 0., reason).evidence(offset);
         }
@@ -216,7 +283,12 @@ impl Planner {
         if offset.abs() > self.options.max_offset_ms {
             self.reset();
             self.stepped = Some(stamp);
-            return Plan::new("step", 0., "Sources agree; clock set to the agreed time")
+            self.holding_since = Some(now);
+            // Setting the time doesn't change how fast the crystal runs.
+            let rate = if self.known { self.frequency } else { 0. };
+            self.set_rate(rate, now);
+            self.last_good = Some(now);
+            return Plan::new("step", rate, "Sources agree; clock set to the agreed time")
                 .evidence(offset);
         }
         if let Some(last) = self.last_sample {
@@ -246,6 +318,8 @@ impl Planner {
                     * (estimate.clamp(-self.options.max_slew_ppm, self.options.max_slew_ppm)
                         - self.frequency);
                 self.anchor = Some((stamp, offset));
+                self.estimates += 1;
+                self.known |= self.estimates >= LEARNED;
             }
             Some(_) => {}
             None => self.anchor = Some((stamp, offset)),
@@ -260,10 +334,12 @@ impl Planner {
         self.last_good = Some(now);
         self.updates += 1;
         if self.updates < 3 {
-            self.set_rate(0., now);
+            // A known drift keeps running while the filter settles.
+            let rate = if self.known { self.frequency } else { 0. };
+            self.set_rate(rate, now);
             return Plan::new(
                 "warmup",
-                0.,
+                rate,
                 format!(
                     "Clock filter settling: {}/3 new system-peer samples",
                     self.updates
@@ -276,6 +352,7 @@ impl Planner {
                 .clamp(-self.options.max_slew_ppm, self.options.max_slew_ppm),
             now,
         );
+        self.holding_since = None;
         let mut result =
             Plan::new("slew", self.rate, "Bounded gradual correction").evidence(offset);
         result.frequency_ppm = self.frequency;
@@ -348,6 +425,10 @@ impl<B: Backend> Controller<B> {
         }
         let mut plan = self.planner.plan(assessment, now);
         match plan.action.as_str() {
+            "warmup" if plan.rate_ppm != 0. => {
+                plan.windows_reported_rate_ppm = Some(self.backend.rate(plan.rate_ppm)?);
+                self.suspended = false;
+            }
             "suspend" | "warmup" => {
                 self.backend.restore()?;
                 self.suspended = true;
@@ -360,6 +441,10 @@ impl<B: Backend> Controller<B> {
                 self.backend.restore()?;
                 self.backend.step(plan.offset_ms.unwrap_or(f64::NAN))?;
                 self.suspended = true;
+                if plan.rate_ppm != 0. {
+                    plan.windows_reported_rate_ppm = Some(self.backend.rate(plan.rate_ppm)?);
+                    self.suspended = false;
+                }
             }
             _ => {}
         }
@@ -403,6 +488,24 @@ impl<B: Backend> Drop for Controller<B> {
     }
 }
 
+fn drift_path(root: &std::path::Path) -> std::path::PathBuf {
+    root.join("data/clock-drift.json")
+}
+/// The learned frequency from a previous run, if recent and plausible.
+fn load_drift(root: &std::path::Path, utc: f64) -> Option<f64> {
+    let saved: serde_json::Value =
+        serde_json::from_slice(&std::fs::read(drift_path(root)).ok()?).ok()?;
+    let age = utc - saved["utc"].as_f64()?;
+    let frequency = saved["frequency_ppm"].as_f64()?;
+    ((0. ..=30. * 86400.).contains(&age) && frequency.is_finite()).then_some(frequency)
+}
+fn save_drift(root: &std::path::Path, frequency: f64, utc: f64) -> Result<()> {
+    crate::windows::atomic_write(
+        &drift_path(root),
+        &serde_json::to_vec(&serde_json::json!({"frequency_ppm": frequency, "utc": utc}))?,
+    )
+}
+
 /// The watchdog runs independently of DNS/TLS/UDP waits in the polling thread.
 pub struct Session {
     controller: std::sync::Arc<std::sync::Mutex<Controller<WindowsClock>>>,
@@ -417,10 +520,11 @@ impl Session {
             crate::ownership::guard(root, &mut crate::ownership::WindowsServices)?,
             "Clock ownership is not authorized or another controller is running"
         );
-        let controller = std::sync::Arc::new(std::sync::Mutex::new(Controller::new(
-            options,
-            WindowsClock::new()?,
-        )?));
+        let mut controller = Controller::new(options, WindowsClock::new()?)?;
+        if let Some(frequency) = load_drift(root, crate::protocol::utc()) {
+            controller.planner.seed(frequency, crate::protocol::mono());
+        }
+        let controller = std::sync::Arc::new(std::sync::Mutex::new(controller));
         let cancelled = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
         let failure = std::sync::Arc::new(std::sync::Mutex::new(None));
         let c = controller.clone();
@@ -490,10 +594,16 @@ impl Session {
     pub fn update(&self, assessment: &Assessment, now: f64) -> Result<Plan> {
         self.check()?;
         let guard = Ownership::check(&self.root);
-        self.controller
+        let mut controller = self
+            .controller
             .lock()
-            .map_err(|_| anyhow::anyhow!("Clock controller lock failed"))?
-            .update(assessment, now, guard)
+            .map_err(|_| anyhow::anyhow!("Clock controller lock failed"))?;
+        let plan = controller.update(assessment, now, guard)?;
+        if let Some(frequency) = controller.planner.drift_to_save(now) {
+            // Losing this file only means the drift is learned again.
+            let _ = save_drift(&self.root, frequency, crate::protocol::utc());
+        }
+        Ok(plan)
     }
 }
 impl Drop for Session {
@@ -795,5 +905,127 @@ mod tests {
             "slew"
         );
         assert_eq!(steps.borrow().len(), 1);
+    }
+    /// A planner that has tracked a clock running `drift` ppm fast or slow
+    /// long enough to trust its frequency estimate. Returns the last stamp.
+    fn learned(drift: f64) -> (Planner, f64) {
+        let mut p = Planner::new(Clock::default());
+        let (mut offset, mut rate, mut stamp) = (0., 0., 0.);
+        for k in 1..=200 {
+            stamp = 64. * k as f64;
+            offset -= (drift + rate) * 64. / 1000.;
+            rate = p.plan(&assessment(stamp, offset), stamp).rate_ppm;
+        }
+        assert!(
+            p.known && (p.frequency + drift).abs() < 1.,
+            "{}",
+            p.frequency
+        );
+        (p, stamp)
+    }
+    #[test]
+    fn learned_drift_survives_a_step_and_runs_while_samples_rebuild() {
+        let (mut p, stamp) = learned(25.);
+        let frequency = p.frequency;
+        let now = stamp + 64.;
+        assert_eq!(p.plan(&assessment(now, -7_500.), now).action, "step");
+        assert_eq!(p.frequency, frequency);
+        // Filters are rebuilding: the drift rate keeps running, not neutral.
+        let waiting = Assessment {
+            ready: false,
+            ..assessment(now, 0.)
+        };
+        let plan = p.plan(&waiting, now + 60.);
+        assert_eq!((plan.action.as_str(), plan.rate_ppm), ("warmup", frequency));
+        // So does the filter warmup once fresh samples agree.
+        let plan = p.plan(&assessment(now + 240., 0.3), now + 240.);
+        assert_eq!((plan.action.as_str(), plan.rate_ppm), ("warmup", frequency));
+        // Beyond holdover without agreement, correction suspends as before.
+        let mut late = p.plan(&waiting, now + 240. + 901.);
+        assert_eq!((late.action.as_str(), late.rate_ppm), ("suspend", 0.));
+        late = p.plan(&waiting, now + 240. + 902.);
+        assert_eq!(late.action, "suspend");
+        assert_eq!(p.frequency, frequency, "the estimate itself is kept");
+    }
+    #[test]
+    fn saved_drift_is_applied_from_the_start_for_at_most_holdover() {
+        let rates: Rc<RefCell<Vec<f64>>> = Rc::default();
+        let mut c =
+            Controller::new(Clock::default(), Fake(Rc::clone(&rates), Rc::default())).unwrap();
+        assert!(!c.planner.seed(f64::NAN, 0.));
+        assert!(!c.planner.seed(251., 0.));
+        assert!(c.planner.seed(-24., 0.));
+        let waiting = Assessment {
+            ready: false,
+            ..Default::default()
+        };
+        let plan = c.update(&waiting, 10., true).unwrap();
+        assert_eq!((plan.action.as_str(), plan.rate_ppm), ("warmup", -24.));
+        assert_eq!(*rates.borrow().last().unwrap(), -24.);
+        // The watchdog still restores neutral once holdover has passed.
+        assert!(c.watchdog(901., true).unwrap());
+        assert_eq!(*rates.borrow().last().unwrap(), 0.);
+        let plan = c.update(&waiting, 902., true).unwrap();
+        assert_eq!((plan.action.as_str(), plan.rate_ppm), ("suspend", 0.));
+    }
+    #[test]
+    fn drift_is_saved_once_learned_and_at_most_hourly() {
+        let mut fresh = Planner::new(Clock::default());
+        assert_eq!(fresh.drift_to_save(0.), None);
+        let (mut p, stamp) = learned(-30.);
+        let saved = p.drift_to_save(stamp).expect("learned drift is saved");
+        assert!(
+            (saved - 30.).abs() < 1.,
+            "correction for a clock 30 ppm slow"
+        );
+        assert_eq!(p.drift_to_save(stamp + 3599.), None);
+        assert!(p.drift_to_save(stamp + 3600.).is_some());
+        // A seeded value is only saved again after being confirmed.
+        let mut seeded = Planner::new(Clock::default());
+        seeded.seed(-30., 0.);
+        assert_eq!(seeded.drift_to_save(0.), None);
+    }
+    #[test]
+    fn saved_drift_file_rejects_old_or_invalid_values() {
+        let root = crate::test_dir("clock-drift");
+        std::fs::create_dir_all(root.join("data")).unwrap();
+        assert_eq!(load_drift(&root, 1000.), None);
+        save_drift(&root, -21.5, 1000.).unwrap();
+        assert_eq!(load_drift(&root, 1000. + 86400.), Some(-21.5));
+        assert_eq!(load_drift(&root, 1000. + 31. * 86400.), None);
+        assert_eq!(load_drift(&root, 999.), None, "saved in the future");
+        std::fs::write(root.join("data/clock-drift.json"), b"{\"utc\":1000}").unwrap();
+        assert_eq!(load_drift(&root, 1000.), None);
+        let _ = std::fs::remove_dir_all(&root);
+    }
+    #[test]
+    fn after_a_step_a_known_drift_keeps_the_clock_within_a_millisecond() {
+        // A clock 25 ppm fast, set to within 0.3 ms by a step. Filters rebuild
+        // for four polls, then normal tracking resumes. Without the drift
+        // rate those four polls alone would add 6.4 ms of error.
+        const DRIFT: f64 = 25.;
+        let (mut p, mut stamp) = learned(DRIFT);
+        stamp += 64.;
+        let step = p.plan(&assessment(stamp, -7_500.), stamp);
+        assert_eq!(step.action, "step");
+        let (mut offset, mut rate, mut worst) = (0.3, step.rate_ppm, 0_f64);
+        for k in 1..=60 {
+            let a = Assessment {
+                ready: k > 4,
+                ..assessment(stamp + 64. * k as f64, 0.)
+            };
+            offset -= (DRIFT + rate) * 64. / 1000.;
+            let plan = p.plan(
+                &Assessment {
+                    offset_ms: Some(offset),
+                    ..a
+                },
+                a.sample_mono,
+            );
+            assert_ne!(plan.action, "step");
+            rate = plan.rate_ppm;
+            worst = worst.max(offset.abs());
+        }
+        assert!(worst < 1., "offset reached {worst:.2} ms");
     }
 }

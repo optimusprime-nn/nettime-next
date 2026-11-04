@@ -79,6 +79,7 @@ Test names refer to `#[test]` functions in the named source file, or in
 | Rate bounded by `max_slew_ppm` | Done | `clock.rs` | `clock.rs` `controller_warms_deduplicates_bounds_and_restores_on_conflict` |
 | Correct direction and quantization of the Windows rate | Done | `clock.rs` | `clock.rs` `frequency_direction_and_quantization_are_correct` |
 | Frequency estimate that tracks drift and ignores system-peer switches | Done | `clock.rs` | `clock.rs` `frequency_estimate_tracks_a_drifting_clock_with_old_samples`, `system_peer_switch_within_one_poll_round_does_not_kick_frequency` |
+| Learned drift kept across steps and pauses, saved and reloaded at start, and applied while measurements rebuild | Done | `clock.rs` `Planner::seed`, `drift_to_save`, `load_drift` | `clock.rs` `learned_drift_survives_a_step_and_runs_while_samples_rebuild`, `saved_drift_is_applied_from_the_start_for_at_most_holdover`, `drift_is_saved_once_learned_and_at_most_hourly`, `saved_drift_file_rejects_old_or_invalid_values`, `after_a_step_a_known_drift_keeps_the_clock_within_a_millisecond` |
 | Holdover limit, then suspend | Done | `clock.rs` | `clock.rs` `stale_excessive_leap_and_holdover_suspend` |
 | Rate read back from Windows must match the request within 1 ppm | Done | `clock.rs` | Runs live; no unit test (needs the real API) |
 | Actual clock response measured against the performance counter | Done, CI only | `validation.rs` `clock_response` | Disposable runners only; not yet run against 1.0.1 |

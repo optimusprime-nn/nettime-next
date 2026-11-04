@@ -1,3 +1,7 @@
+## Unreleased
+
+- Keeps the learned clock drift when the clock is set or correction pauses, saves it once settled, and loads it at service start. After a restart or a step, the known drift rate runs while measurements rebuild (up to the holdover limit), so the clock settles within minutes instead of about an hour.
+
 ## 1.1.0
 
 - Sets the clock at once when the minimum number of independent source groups agree it is more than the tracking limit out, instead of recovering gradually over hours. Setting the time also updates the PC's hardware clock, so restarts no longer begin seconds off. The recovery limit setting is no longer used.
