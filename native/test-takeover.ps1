@@ -9,7 +9,7 @@ function Invoke-Native([string[]]$Arguments) {
 function Health { return ((Invoke-Native @('--health')) | ConvertFrom-Json) }
 function Controllers {
     $states=@()
-    foreach ($name in @('NetTimeSvc','W32Time','NetTimeNext')) {
+    foreach ($name in @('NetTimeSvc','W32Time','NetTimeNext','vmictimesync')) {
         $svc=Get-CimInstance Win32_Service -Filter "Name='$name'"
         if ($svc) { $states+=@{name=$name;start=$svc.StartMode;running=($svc.State -eq 'Running')} }
     }

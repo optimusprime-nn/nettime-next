@@ -103,7 +103,6 @@ impl Desktop {
         let stale = age.is_none_or(|a| a > self.config.poll_seconds * 3.);
         let ready = sync["ready"].as_bool().unwrap_or(false) && !stale;
         let mode = d["clock_action"]["action"].as_str().unwrap_or("unknown");
-        let recovering = d["clock_action"]["recovering"].as_bool().unwrap_or(false);
         card(ui, |ui| {
             ui.horizontal_wrapped(|ui| {
                 ui.label(
@@ -134,9 +133,7 @@ impl Desktop {
                         "CLOCK STATE NEEDS CHECKING"
                     } else {
                         match mode {
-                            "slew" if recovering => "GRADUAL CLOCK RECOVERY",
-                            "warmup" if recovering => "CONFIRMING CLOCK RECOVERY",
-                            "hold" if recovering => "RECOVERY · WAITING FOR SAMPLE",
+                            "step" => "CLOCK SET TO AGREED TIME",
                             "slew" => "GRADUAL CLOCK CORRECTION",
                             "hold" => "WAITING FOR FRESH SAMPLE",
                             "warmup" => "CLOCK FILTER SETTLING",
@@ -283,7 +280,8 @@ impl Desktop {
             ui.weak("* Recommended source · Offset is server time minus this PC’s time. Stratum is the source’s distance in NTP hops from its reference.");
             if let Some(key) = clicked {
                 self.selected = key;
-                self.load_history();
+                self.history.clear();
+                self.request_refresh();
             }
         });
         ui.add_space(12.);
@@ -305,7 +303,12 @@ impl Desktop {
                     (168., "7 days"),
                     (0., "All retained"),
                 ] {
-                    ui.selectable_value(&mut self.history_hours, hours, label);
+                    if ui
+                        .selectable_value(&mut self.history_hours, hours, label)
+                        .changed()
+                    {
+                        self.request_refresh();
+                    }
                 }
             });
             let cutoff = if self.history_hours > 0. {
@@ -381,10 +384,7 @@ impl Desktop {
             ui.label(format!(
                 "Clock action: {}",
                 match mode {
-                    "slew" if recovering => "Gradual recovery of a large offset",
-                    "warmup" if recovering => "Confirming agreement before gradual recovery",
-                    "hold" if recovering =>
-                        "Recovery waiting for a fresh filter sample; retaining the current rate",
+                    "step" => "Clock set to the time the sources agree on",
                     "observe" => "Observing only",
                     "slew" => "Gradual correction",
                     "hold" => "Waiting for a fresh sample; retaining the current correction rate",

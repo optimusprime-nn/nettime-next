@@ -40,6 +40,8 @@ pub struct Clock {
     #[serde(deserialize_with = "source_count")]
     pub min_sources: usize,
     pub max_offset_ms: f64,
+    /// No longer used: an agreed offset above `max_offset_ms` sets the clock.
+    /// Kept so existing settings files keep loading and validating.
     pub max_recovery_offset_ms: f64,
     pub max_slew_ppm: f64,
     pub holdover_seconds: f64,
@@ -146,6 +148,20 @@ impl Config {
         }
         Ok(())
     }
+    /// Poll/holdover combinations the correction loop cannot track: the system
+    /// peer's best filter sample can be up to eight polls old, and an older
+    /// sample than the holdover suspends correction and resets the loop.
+    /// Checked when settings are applied to an owned clock and at takeover, not
+    /// on load, so existing observe-only installs keep starting.
+    pub fn validate_correction(&self) -> Result<()> {
+        let window = 8. * self.poll_seconds + 1.;
+        ensure!(
+            self.clock.holdover_seconds >= window,
+            "Clock correction needs a holdover of at least eight poll intervals plus one second ({window:.0} s at a {:.0} s poll)",
+            self.poll_seconds
+        );
+        Ok(())
+    }
 }
 pub fn machine_root() -> PathBuf {
     PathBuf::from(std::env::var_os("ProgramData").unwrap_or_else(|| "C:\\ProgramData".into()))
@@ -233,5 +249,25 @@ mod tests {
         }
         cfg.clock.max_recovery_offset_ms = 128.;
         cfg.validate().unwrap();
+    }
+    #[test]
+    fn correction_rejects_poll_and_holdover_it_cannot_track() {
+        let mut cfg = Config {
+            servers: vec![Server {
+                host: "ntp.invalid".into(),
+                ..Default::default()
+            }],
+            ..Default::default()
+        };
+        cfg.validate_correction().unwrap();
+        for (poll, holdover) in [(1024., 900.), (64., 64.), (64., 512.), (512., 3600.)] {
+            cfg.poll_seconds = poll;
+            cfg.clock.holdover_seconds = holdover;
+            cfg.validate().unwrap();
+            assert!(cfg.validate_correction().is_err(), "{poll}/{holdover}");
+        }
+        cfg.poll_seconds = 64.;
+        cfg.clock.holdover_seconds = 513.;
+        cfg.validate_correction().unwrap();
     }
 }

@@ -23,7 +23,10 @@ use windows_sys::Win32::{
     System::Services::{ChangeServiceConfigW, SERVICE_NO_CHANGE},
 };
 
-pub const CONTROLLERS: [&str; 3] = ["NetTimeSvc", "W32Time", "NetTimeNext"];
+/// Other clock writers that takeover stops and disables, and rollback restores.
+/// vmictimesync is the Hyper-V guest time synchronization service; on a
+/// Hyper-V VM it would keep correcting the clock alongside this service.
+pub const CONTROLLERS: [&str; 4] = ["NetTimeSvc", "W32Time", "NetTimeNext", "vmictimesync"];
 pub fn account() -> String {
     format!("NT SERVICE\\{}", service::NAME)
 }
@@ -291,6 +294,9 @@ pub struct Journal {
     pub previous_config: Vec<u8>,
     pub privilege_preexisting: bool,
     pub clock_started: bool,
+    /// Controllers recorded by `migrate` whose stop/disable has not completed.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub pending_stop: Vec<String>,
 }
 pub fn journal(root: &Path) -> Result<Option<Journal>> {
     let path = root.join("clock-ownership.json");
@@ -307,6 +313,52 @@ fn save(root: &Path, journal: &Journal) -> Result<()> {
 }
 pub fn active(root: &Path) -> Result<bool> {
     Ok(journal(root)?.is_some_and(|j| j.phase == "active"))
+}
+/// Brings an active journal written by an older version up to the current
+/// CONTROLLERS (1.0.1 did not control vmictimesync). Each missing controller's
+/// original state is saved durably before it is stopped and disabled, so a
+/// later rollback restores it; a retry after a partial failure completes the
+/// pending stops. Controllers already in the journal are never touched here:
+/// one running again is a conflict for `guard` to report.
+pub fn migrate(root: &Path, backend: &mut impl Services) -> Result<()> {
+    let Some(mut j) = journal(root)? else {
+        return Ok(());
+    };
+    if j.phase != "active" {
+        return Ok(());
+    }
+    let missing: Vec<_> = CONTROLLERS
+        .into_iter()
+        .filter(|name| {
+            !j.controllers
+                .iter()
+                .any(|s| s.name.eq_ignore_ascii_case(name))
+        })
+        .collect();
+    if missing.is_empty() && j.pending_stop.is_empty() {
+        return Ok(());
+    }
+    for name in &missing {
+        let original = backend.snapshot(name)?;
+        if original.exists {
+            j.pending_stop.push(original.name.clone());
+        }
+        j.controllers.push(original);
+    }
+    save(root, &j)?;
+    for name in j.pending_stop.clone() {
+        backend.change(&name, false)?;
+        backend.configure(&name, Some(4), None)?;
+        j.pending_stop.retain(|n| n != &name);
+        save(root, &j)?;
+    }
+    if !missing.is_empty() {
+        Store::open(&root.join("data/history.sqlite3"), false)?.event(
+            "takeover_migrated",
+            &json!({"added":j.controllers.iter().filter(|s| missing.contains(&s.name.as_str())).collect::<Vec<_>>()}),
+        )?;
+    }
+    Ok(())
 }
 pub fn guard(root: &Path, backend: &mut impl Services) -> Result<bool> {
     if !active(root)? {
@@ -343,10 +395,8 @@ pub fn readiness(cfg: &Config, decision: &serde_json::Value, now: f64) -> Result
         (0. ..=cfg.clock.holdover_seconds).contains(&sample_age),
         "Filtered sample expired"
     );
-    ensure!(
-        offset.is_finite() && offset.abs() <= cfg.clock.max_recovery_offset_ms,
-        "Offset exceeds automatic recovery limit; no clock step"
-    );
+    // Any agreed offset is acceptable: one beyond the tracking limit is set at once.
+    ensure!(offset.is_finite(), "No agreed offset is available");
     Ok(())
 }
 pub fn activate(root: &Path, backend: &mut impl Services) -> Result<()> {
@@ -359,6 +409,7 @@ pub fn activate(root: &Path, backend: &mut impl Services) -> Result<()> {
         cfg.clock.mode == "observe",
         "Service must start in observe mode"
     );
+    cfg.validate_correction()?;
     let store = Store::open(&root.join("data/history.sqlite3"), true)?;
     let decision = store.latest()?.context("Wait for source measurements")?;
     let instance: serde_json::Value =
@@ -388,14 +439,18 @@ pub fn activate(root: &Path, backend: &mut impl Services) -> Result<()> {
         previous_config: std::fs::read(root.join("settings.json"))?,
         privilege_preexisting: backend.privilege(None)?,
         clock_started: false,
+        pending_stop: vec![],
     };
     save(root, &j)?;
     drop(store);
-    Store::open(&root.join("data/history.sqlite3"), false)?.event(
-        "takeover_prepared",
-        &json!({"services":j.controllers,"assessment":decision["synchronization"]}),
-    )?;
+    // Everything after the prepared journal is saved, including this log
+    // write, runs inside the rollback scope; a failure must not leave the
+    // journal stuck at "prepared".
     let result = (|| -> Result<()> {
+        Store::open(&root.join("data/history.sqlite3"), false)?.event(
+            "takeover_prepared",
+            &json!({"services":j.controllers,"assessment":decision["synchronization"]}),
+        )?;
         backend.change(service::NAME, false)?;
         backend.privilege(Some(true))?;
         for s in &j.controllers {
@@ -498,6 +553,7 @@ mod tests {
                 ("NetTimeSvc", 2, true),
                 ("W32Time", 3, false),
                 ("NetTimeNext", 2, true),
+                ("vmictimesync", 3, true),
             ] {
                 states.insert(
                     name.into(),
@@ -570,11 +626,7 @@ mod tests {
     }
     impl Fixture {
         fn new() -> Self {
-            let root = std::env::current_dir().unwrap().join("work").join(format!(
-                "ownership-{}-{}",
-                std::process::id(),
-                (utc() * 1e9) as u128
-            ));
+            let root = crate::test_dir("ownership");
             std::fs::create_dir_all(root.join("data")).unwrap();
             let mut cfg = Config::default();
             cfg.servers.push(crate::config::Server {
@@ -629,7 +681,14 @@ mod tests {
     }
     #[test]
     fn every_activation_mutation_failure_restores_exact_states_and_config() {
-        for fail_at in 0..10 {
+        let mutations = {
+            let fixture = Fixture::new();
+            let mut backend = Fake::new();
+            activate(&fixture.root, &mut backend).unwrap();
+            backend.changes
+        };
+        assert!(mutations >= 10);
+        for fail_at in 0..mutations {
             let fixture = Fixture::new();
             let mut backend = Fake::new();
             let original = backend.states.clone();
@@ -642,12 +701,35 @@ mod tests {
         }
     }
     #[test]
+    fn failed_takeover_log_write_rolls_back() {
+        let fixture = Fixture::new();
+        Store::open(&fixture.root.join("data/history.sqlite3"), false)
+            .unwrap()
+            .db
+            .execute_batch(
+                "CREATE TRIGGER fail BEFORE INSERT ON events WHEN NEW.kind='takeover_prepared'
+                 BEGIN SELECT RAISE(ABORT,'injected log failure'); END",
+            )
+            .unwrap();
+        let mut backend = Fake::new();
+        let original = backend.states.clone();
+        let error = activate(&fixture.root, &mut backend).unwrap_err();
+        assert!(format!("{error:#}").contains("injected log failure"));
+        assert_restored(&fixture, &backend, &original);
+    }
+    #[test]
     fn rollback_is_retryable_and_preserves_existing_privilege() {
         let fixture = Fixture::new();
         let mut backend = Fake::new();
         let original = backend.states.clone();
         activate(&fixture.root, &mut backend).unwrap();
         assert!(guard(&fixture.root, &mut backend).unwrap());
+        let hyperv = &backend.states["vmictimesync"];
+        assert!(!hyperv.running);
+        assert_eq!(hyperv.start_type, 4);
+        backend.states.get_mut("vmictimesync").unwrap().running = true;
+        assert!(!guard(&fixture.root, &mut backend).unwrap());
+        backend.states.get_mut("vmictimesync").unwrap().running = false;
         backend.fail_at = Some(backend.changes + 1);
         assert!(rollback(&fixture.root, &mut backend).is_err());
         assert_eq!(
@@ -663,6 +745,66 @@ mod tests {
         rollback(&fixture.root, &mut backend).unwrap();
         assert!(backend.privilege);
     }
+    /// An owner activated by 1.0.1, whose journal has no vmictimesync entry.
+    fn legacy_owner(hyperv_running: bool) -> (Fixture, Fake, BTreeMap<String, Snapshot>) {
+        let fixture = Fixture::new();
+        let mut backend = Fake::new();
+        backend.states.get_mut("vmictimesync").unwrap().running = hyperv_running;
+        let original = backend.states.clone();
+        activate(&fixture.root, &mut backend).unwrap();
+        let mut j = journal(&fixture.root).unwrap().unwrap();
+        j.controllers.retain(|s| s.name != "vmictimesync");
+        save(&fixture.root, &j).unwrap();
+        backend
+            .states
+            .insert("vmictimesync".into(), original["vmictimesync"].clone());
+        (fixture, backend, original)
+    }
+    #[test]
+    fn legacy_journal_migrates_hyperv_and_rollback_restores_it() {
+        for running in [true, false] {
+            let (fixture, mut backend, original) = legacy_owner(running);
+            assert_eq!(guard(&fixture.root, &mut backend).unwrap(), !running);
+            migrate(&fixture.root, &mut backend).unwrap();
+            assert!(guard(&fixture.root, &mut backend).unwrap());
+            let hyperv = &backend.states["vmictimesync"];
+            assert!(!hyperv.running);
+            assert_eq!(hyperv.start_type, 4);
+            let j = journal(&fixture.root).unwrap().unwrap();
+            assert!(j.pending_stop.is_empty());
+            assert_eq!(j.controllers.len(), CONTROLLERS.len());
+            migrate(&fixture.root, &mut backend).unwrap();
+            rollback(&fixture.root, &mut backend).unwrap();
+            assert_restored(&fixture, &backend, &original);
+        }
+    }
+    #[test]
+    fn interrupted_migration_completes_on_retry_and_keeps_rollback_state() {
+        for step in 0..2 {
+            let (fixture, mut backend, original) = legacy_owner(true);
+            backend.fail_at = Some(backend.changes + step);
+            assert!(migrate(&fixture.root, &mut backend).is_err());
+            let j = journal(&fixture.root).unwrap().unwrap();
+            assert_eq!(j.pending_stop, ["vmictimesync"]);
+            assert_eq!(
+                serde_json::to_value(j.controllers.last().unwrap()).unwrap(),
+                serde_json::to_value(&original["vmictimesync"]).unwrap()
+            );
+            assert!(!guard(&fixture.root, &mut backend).unwrap() || step == 1);
+            migrate(&fixture.root, &mut backend).unwrap();
+            assert!(guard(&fixture.root, &mut backend).unwrap());
+            rollback(&fixture.root, &mut backend).unwrap();
+            assert_restored(&fixture, &backend, &original);
+        }
+    }
+    #[test]
+    fn migration_does_not_mask_a_restarted_legacy_controller() {
+        let (fixture, mut backend, _) = legacy_owner(false);
+        backend.states.get_mut("W32Time").unwrap().running = true;
+        migrate(&fixture.root, &mut backend).unwrap();
+        assert!(backend.states["W32Time"].running);
+        assert!(!guard(&fixture.root, &mut backend).unwrap());
+    }
     #[test]
     fn bad_evidence_never_changes_services() {
         let fixture = Fixture::new();
@@ -675,7 +817,7 @@ mod tests {
         assert!(activate(&fixture.root, &mut backend).is_err());
         assert_eq!(backend.changes, 0);
         assert!(journal(&fixture.root).unwrap().is_none());
-        let mut cfg = Config::default();
+        let cfg = Config::default();
         let mut d =
             json!({"utc":1000.,"synchronization":{"ready":true,"sample_utc":1000.,"offset_ms":1.}});
         assert!(readiness(&cfg, &d, 1000.).is_ok());
@@ -683,13 +825,11 @@ mod tests {
         d["synchronization"]["offset_ms"] = json!(129.);
         assert!(readiness(&cfg, &d, 1000.).is_ok());
         d["synchronization"]["offset_ms"] = json!(10_001.);
+        assert!(readiness(&cfg, &d, 1000.).is_ok());
+        d["synchronization"]["offset_ms"] = json!(f64::NAN);
         assert!(readiness(&cfg, &d, 1000.).is_err());
         d["synchronization"]["offset_ms"] = json!(1.);
         d["synchronization"]["sample_utc"] = json!(1001.);
-        assert!(readiness(&cfg, &d, 1000.).is_err());
-        cfg.clock.max_offset_ms = 0.5;
-        cfg.clock.max_recovery_offset_ms = 0.5;
-        d["synchronization"]["sample_utc"] = json!(1000.);
         assert!(readiness(&cfg, &d, 1000.).is_err());
     }
 }

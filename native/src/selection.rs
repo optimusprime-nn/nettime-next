@@ -13,6 +13,10 @@ pub struct Peer {
     pub next_due: f64,
     pub disabled: String,
     pub nts: crate::nts::NtsClient,
+    /// The configured poll interval that a RATE kiss-o'-death backs off from.
+    pub base_interval: f64,
+    /// Consecutive valid replies since the last RATE change.
+    calm: u8,
 }
 impl Peer {
     pub fn new(server: Server, interval: f64) -> Self {
@@ -25,6 +29,8 @@ impl Peer {
             next_due: 0.,
             disabled: String::new(),
             nts: Default::default(),
+            base_interval: interval,
+            calm: 0,
         }
     }
     pub fn accept(&mut self, s: Sample) {
@@ -36,6 +42,14 @@ impl Peer {
             self.samples.clear();
         }
         self.reach = (self.reach << 1) | u8::from(s.status == "valid");
+        if s.status == "valid" && self.interval > self.base_interval {
+            // Undo one RATE doubling after eight consecutive valid replies.
+            self.calm += 1;
+            if self.calm >= 8 {
+                self.interval = (self.interval / 2.).max(self.base_interval);
+                self.calm = 0;
+            }
+        }
         if s.status == "valid" {
             if self.samples.len() == 8 {
                 self.samples.pop_front();
@@ -45,8 +59,11 @@ impl Peer {
         if s.status == "control" {
             match s.kod.as_str() {
                 "RATE" => {
-                    self.interval =
-                        (self.interval * 2.).max(2_f64.powi((s.poll as i32).clamp(6, 17)))
+                    self.calm = 0;
+                    // Bounded by the longest configurable poll interval.
+                    self.interval = (self.interval * 2.)
+                        .max(2_f64.powi((s.poll as i32).clamp(6, 17)))
+                        .min(131072.)
                 }
                 "DENY" | "RSTR" => {
                     self.disabled = format!(
@@ -122,10 +139,20 @@ fn filtered(p: &Peer, now: f64, limit: f64) -> Result<Candidate, String> {
         return Err(p.disabled.clone());
     }
     let latest = p.latest.as_ref().ok_or("No current response")?;
-    if latest.status != "valid" || p.reach == 0 {
+    // One lost or rejected reply is tolerated because the filter still holds
+    // the earlier samples. Two consecutive failures, or a kiss-o'-death,
+    // remove the source from selection.
+    if latest.status == "control" || p.reach & 0b11 == 0 {
         return Err(latest.reason.clone());
     }
-    if now - latest.mono > 3. * p.interval {
+    let newest = p.samples.back().ok_or_else(|| {
+        if latest.status == "valid" {
+            "Filter expired".to_string()
+        } else {
+            latest.reason.clone()
+        }
+    })?;
+    if now - newest.mono > 3. * p.interval {
         return Err("Latest response expired".into());
     }
     let mut samples: Vec<_> = p
@@ -231,8 +258,7 @@ fn intersection(c: &[Candidate]) -> Option<(f64, f64, usize)> {
 }
 pub fn assess(peers: &[Peer], cfg: &Config, now: f64) -> Assessment {
     let mut a = Assessment::default();
-    let mut endpoints = HashSet::new();
-    let mut groups = HashSet::new();
+    let mut qualified = vec![];
     for p in peers {
         let key = p.server.key();
         match filtered(p, now, cfg.max_distance_ms) {
@@ -240,27 +266,43 @@ pub fn assess(peers: &[Peer], cfg: &Config, now: f64) -> Assessment {
                 a.reasons.insert(key, reason);
             }
             Ok(c) => {
-                let endpoint = (c.address.clone(), c.port);
-                let reason = if endpoints.contains(&endpoint) {
-                    "Same resolved endpoint; no additional vote"
-                } else if c.source_group.is_empty() {
+                let reason = if c.source_group.is_empty() {
                     "Assign independent source group"
-                } else if groups.contains(&c.source_group) {
-                    "Same source group; measured but no additional vote"
                 } else if c.samples < 4 {
                     "Filter warming: need four fresh measurements"
                 } else if cfg.clock.require_nts && c.authentication != "authenticated" {
                     "Clock policy requires NTS"
                 } else {
-                    "Filtered candidate"
+                    qualified.push(c);
+                    continue;
                 };
                 a.reasons.insert(key, reason.into());
-                if reason == "Filtered candidate" {
-                    endpoints.insert(endpoint);
-                    groups.insert(c.source_group.clone());
-                    a.candidates.push(c);
-                }
             }
+        }
+    }
+    // Each group and endpoint votes once, through its best (lowest distance)
+    // source, not whichever one comes first in the configuration.
+    qualified.sort_by(|x, y| {
+        x.distance_ms
+            .total_cmp(&y.distance_ms)
+            .then(x.peer.cmp(&y.peer))
+    });
+    let mut endpoints = HashSet::new();
+    let mut groups = HashSet::new();
+    for c in qualified {
+        let endpoint = (c.address.clone(), c.port);
+        let reason = if endpoints.contains(&endpoint) {
+            "Same resolved endpoint; no additional vote"
+        } else if groups.contains(&c.source_group) {
+            "Same source group; measured but no additional vote"
+        } else {
+            "Filtered candidate"
+        };
+        a.reasons.insert(c.peer.clone(), reason.into());
+        if reason == "Filtered candidate" {
+            endpoints.insert(endpoint);
+            groups.insert(c.source_group.clone());
+            a.candidates.push(c);
         }
     }
     if a.candidates.len() < cfg.clock.min_sources {
@@ -425,6 +467,28 @@ mod tests {
         assert!(!assess(&p, &c, 949.).ready);
     }
     #[test]
+    fn group_votes_through_its_best_source_not_the_first_configured() {
+        let (mut p, mut c) = peers(4);
+        // Peers 0 and 3 share a group; peer 3 is far more precise.
+        p[3].server.source_group = "group0".into();
+        c.servers[3].source_group = "group0".into();
+        for s in &mut p[0].samples {
+            s.delay_ms = 200.;
+        }
+        let a = assess(&p, &c, 949.);
+        assert!(a.ready, "{}", a.explanation);
+        assert!(a.candidates.iter().any(|x| x.peer == p[3].server.key()));
+        assert!(!a.candidates.iter().any(|x| x.peer == p[0].server.key()));
+        assert_eq!(
+            a.reasons[&p[0].server.key()],
+            "Same source group; measured but no additional vote"
+        );
+        // A warming source does not claim the group either.
+        p[3].samples.truncate(2);
+        let a = assess(&p, &c, 949.);
+        assert!(a.candidates.iter().any(|x| x.peer == p[0].server.key()));
+    }
+    #[test]
     fn stale_or_unfilled_filters_cannot_control() {
         let (mut p, c) = peers(3);
         assert!(!assess(&p, &c, 1200.).ready);
@@ -441,6 +505,70 @@ mod tests {
         assert!(a.ready);
         assert!(a.offset_ms.unwrap() < 3.);
         assert!(!a.survivors.iter().any(|s| s.peer == p[3].server.key()));
+    }
+    fn failed(p: &mut Peer, mono: f64, status: &str) {
+        p.accept(Sample {
+            host: p.server.host.clone(),
+            address: p.server.host.clone(),
+            status: status.into(),
+            reason: "timed out".into(),
+            mono,
+            ..Default::default()
+        });
+    }
+    #[test]
+    fn one_lost_reply_does_not_remove_a_source() {
+        let (mut p, c) = peers(3);
+        failed(&mut p[0], 1012., "error");
+        let a = assess(&p, &c, 1013.);
+        assert!(a.ready, "{}", a.explanation);
+        assert_eq!(a.survivors.len(), 3);
+        failed(&mut p[0], 1076., "error");
+        let a = assess(&p, &c, 1077.);
+        assert!(!a.ready);
+        assert_eq!(a.reasons[&p[0].server.key()], "timed out");
+    }
+    #[test]
+    fn rate_kiss_of_death_backoff_is_bounded() {
+        let (mut p, _) = peers(1);
+        for _ in 0..40 {
+            p[0].accept(Sample {
+                status: "control".into(),
+                kod: "RATE".into(),
+                ..Default::default()
+            });
+        }
+        assert_eq!(p[0].interval, 131072.);
+    }
+    #[test]
+    fn rate_backoff_unwinds_after_steady_replies() {
+        let (mut p, _) = peers(1);
+        let valid = p[0].samples[0].clone();
+        for _ in 0..2 {
+            p[0].accept(Sample {
+                status: "control".into(),
+                kod: "RATE".into(),
+                address: valid.address.clone(),
+                ..Default::default()
+            });
+        }
+        assert_eq!(p[0].interval, 256.);
+        for _ in 0..7 {
+            p[0].accept(valid.clone());
+        }
+        assert_eq!(p[0].interval, 256.);
+        p[0].accept(valid.clone());
+        assert_eq!(p[0].interval, 128.);
+        for _ in 0..16 {
+            p[0].accept(valid.clone());
+        }
+        assert_eq!(p[0].interval, 64.);
+    }
+    #[test]
+    fn kiss_of_death_removes_a_source_at_once() {
+        let (mut p, c) = peers(3);
+        failed(&mut p[0], 1012., "control");
+        assert!(!assess(&p, &c, 1013.).ready);
     }
     #[test]
     fn nts_required_policy_rejects_unauthenticated_votes() {

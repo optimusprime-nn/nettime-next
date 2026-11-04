@@ -1,4 +1,5 @@
 mod dashboard;
+mod instance;
 mod panels;
 mod reports;
 mod settings;
@@ -32,6 +33,8 @@ struct Desktop {
     selected: String,
     history: Vec<[f64; 2]>,
     last: Instant,
+    // Database and SCM reads run off the UI thread; see `refresh`.
+    refresh_worker: Option<std::sync::mpsc::Receiver<Refreshed>>,
     settings: bool,
     dark: bool,
     tray: Option<TrayIcon>,
@@ -40,6 +43,8 @@ struct Desktop {
     _exit: MenuItem,
     actions: Arc<Mutex<Vec<tray::Action>>>,
     hidden: bool,
+    /// Started at sign-in with --tray: hide the window eframe shows after frame one.
+    start_in_tray: bool,
     smoke: bool,
     config_path: PathBuf,
     comparison: bool,
@@ -70,6 +75,21 @@ pub fn run(
     software: bool,
     tray_test: Option<PathBuf>,
 ) -> Result<()> {
+    // Smoke, capture and tray-test runs may overlap a desktop the user has open.
+    let single = !smoke && tray_test.is_none() && !std::env::args().any(|a| a == "--capture-ui");
+    let wake = if single {
+        let show = !std::env::args().any(|a| a == "--tray");
+        match instance::claim(instance::NAME, show) {
+            Ok(Some(wake)) => Some(wake),
+            Ok(None) => return Ok(()),
+            Err(error) => {
+                eprintln!("{error:#}");
+                None
+            }
+        }
+    } else {
+        None
+    };
     // Windows' built-in Direct3D software adapter also works without an OpenGL
     // driver (server sessions, remote desktops and disposable test machines).
     let mut setup = eframe::egui_wgpu::WgpuSetupCreateNew::default();
@@ -129,6 +149,10 @@ pub fn run(
                 queue: actions.clone(),
                 context: cc.egui_ctx.clone(),
             };
+            if let Some(wake) = wake {
+                let wake_control = control.clone();
+                wake.listen(move || wake_control.request(tray::Action::Open));
+            }
             let click_control = control.clone();
             TrayIconEvent::set_event_handler(Some(move |event| {
                 if tray::opens(&event) {
@@ -190,6 +214,7 @@ pub fn run(
             } else {
                 None
             };
+            let start_in_tray = tray.is_some() && std::env::args().any(|a| a == "--tray");
             Ok(Box::new(Desktop {
                 database,
                 settings_config: {
@@ -203,6 +228,7 @@ pub fn run(
                 selected: String::new(),
                 history: vec![],
                 last: Instant::now() - Duration::from_secs(5),
+                refresh_worker: None,
                 settings: ["settings", "collection", "retention", "clock", "service", "appearance"]
                     .contains(&screen.as_str()),
                 dark: appearance.dark,
@@ -212,6 +238,7 @@ pub fn run(
                 _exit: exit,
                 actions,
                 hidden: false,
+                start_in_tray,
                 smoke,
                 config_path,
                 comparison: screen == "comparison",
@@ -268,51 +295,123 @@ fn icon_pixels() -> Vec<u8> {
     }
     rgba
 }
+/// One background read of the history database and service state.
+struct Refreshed {
+    decision: std::result::Result<Option<Value>, String>,
+    /// The source selection this read was made for, and the one it chose.
+    requested: String,
+    selected: String,
+    history: Vec<[f64; 2]>,
+    service: String,
+}
+fn read_state(
+    database: &std::path::Path,
+    servers: &[crate::config::Server],
+    requested: String,
+    since: f64,
+) -> Refreshed {
+    let store = Store::open(database, true);
+    let decision = store
+        .as_ref()
+        .map_err(|e| e.to_string())
+        .and_then(|s| s.latest().map_err(|e| e.to_string()));
+    let mut selected = requested.clone();
+    if let Ok(Some(d)) = &decision {
+        let peers = dashboard::rows(d);
+        if !peers.iter().any(|(key, _)| *key == selected) {
+            selected = d["selected"]
+                .as_str()
+                .map(String::from)
+                .or_else(|| peers.first().map(|(key, _)| key.clone()))
+                .unwrap_or_default();
+        }
+    }
+    let history = match (&store, servers.iter().find(|s| s.key() == selected)) {
+        (Ok(db), Some(s)) => db.history(&s.host, s.port, since).unwrap_or_default(),
+        _ => vec![],
+    };
+    let service = crate::ownership::WindowsServices
+        .snapshot(crate::service::NAME)
+        .map(|s| {
+            if !s.exists {
+                "Service not installed"
+            } else if s.running {
+                "Service running"
+            } else {
+                "Service stopped"
+            }
+            .to_string()
+        })
+        .unwrap_or_else(|_| "Service status unavailable".into());
+    Refreshed {
+        decision,
+        requested,
+        selected,
+        history,
+        service,
+    }
+}
 impl Desktop {
+    /// Starts a background read unless one is running. Smoke and capture runs
+    /// wait for it so their first frame shows real data.
     fn refresh(&mut self) {
-        match Store::open(&self.database, true).and_then(|s| s.latest()) {
+        if self.refresh_worker.is_some() {
+            return;
+        }
+        let database = self.database.clone();
+        let servers = self.config.servers.clone();
+        let requested = self.selected.clone();
+        let since = if self.history_hours > 0. {
+            crate::protocol::utc() - self.history_hours * 3600.
+        } else {
+            0.
+        };
+        let (send, receive) = std::sync::mpsc::channel();
+        std::thread::spawn(move || {
+            let _ = send.send(read_state(&database, &servers, requested, since));
+        });
+        if self.smoke || self.capture.is_some() {
+            if let Ok(state) = receive.recv() {
+                self.apply_refresh(state);
+            }
+        } else {
+            self.refresh_worker = Some(receive);
+        }
+    }
+    /// Re-reads at the next frame, for a new source or time range.
+    fn request_refresh(&mut self) {
+        self.last = Instant::now()
+            .checked_sub(Duration::from_secs(5))
+            .unwrap_or(self.last);
+    }
+    fn poll_refresh(&mut self) {
+        let Some(worker) = &self.refresh_worker else {
+            return;
+        };
+        match worker.try_recv() {
+            Ok(state) => {
+                self.refresh_worker = None;
+                self.apply_refresh(state);
+            }
+            Err(std::sync::mpsc::TryRecvError::Empty) => {}
+            Err(std::sync::mpsc::TryRecvError::Disconnected) => self.refresh_worker = None,
+        }
+    }
+    fn apply_refresh(&mut self, state: Refreshed) {
+        match state.decision {
             Ok(d) => {
                 self.decision = d;
                 self.error.clear();
             }
-            Err(e) => self.error = e.to_string(),
-        };
-        if let Some(d) = &self.decision {
-            let peers = dashboard::rows(d);
-            if !peers.iter().any(|(key, _)| *key == self.selected) {
-                self.selected = d["selected"]
-                    .as_str()
-                    .map(String::from)
-                    .or_else(|| peers.first().map(|(key, _)| key.clone()))
-                    .unwrap_or_default();
-            }
+            Err(e) => self.error = e,
         }
-        self.native_service_state = crate::ownership::WindowsServices
-            .snapshot(crate::service::NAME)
-            .map(|s| {
-                if !s.exists {
-                    "Service not installed"
-                } else if s.running {
-                    "Service running"
-                } else {
-                    "Service stopped"
-                }
-                .to_string()
-            })
-            .unwrap_or_else(|_| "Service status unavailable".into());
-        self.load_history();
-    }
-    fn load_history(&mut self) {
-        self.history.clear();
-        if let Some(s) = self
-            .config
-            .servers
-            .iter()
-            .find(|s| s.key() == self.selected)
-        {
-            self.history = Store::open(&self.database, true)
-                .and_then(|db| db.history(&s.host, s.port))
-                .unwrap_or_default();
+        self.native_service_state = state.service;
+        if self.selected == state.requested {
+            self.selected = state.selected;
+            self.history = state.history;
+        } else {
+            // The user picked another source while this read ran.
+            self.request_refresh();
         }
     }
 }
@@ -370,6 +469,20 @@ impl eframe::App for Desktop {
         if open_settings {
             self.open_settings();
         }
+        // eframe makes the window visible after painting the first frame,
+        // whatever the viewport asked for, so a tray start hides it on the next.
+        // An Open request (tray, menu or another launch) cancels the hide.
+        if self.start_in_tray {
+            if show {
+                self.start_in_tray = false;
+            } else if ctx.cumulative_pass_nr() == 0 {
+                ctx.request_repaint();
+            } else {
+                self.start_in_tray = false;
+                self.hidden = true;
+                ctx.send_viewport_cmd(ViewportCommand::Visible(false));
+            }
+        }
         if show {
             self.hidden = false;
             ctx.send_viewport_cmd(ViewportCommand::Visible(true));
@@ -390,6 +503,7 @@ impl eframe::App for Desktop {
             self.hidden = true;
             ctx.send_viewport_cmd(ViewportCommand::Visible(false));
         }
+        self.poll_refresh();
         if self.last.elapsed() > Duration::from_secs(2) {
             self.refresh();
             self.last = Instant::now();
@@ -512,5 +626,45 @@ impl eframe::App for Desktop {
         } else if self.smoke && self.capture.is_none() {
             ctx.send_viewport_cmd(ViewportCommand::Close);
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::protocol::Sample;
+    #[test]
+    fn background_read_selects_the_system_peer_and_bounds_history() {
+        let root = crate::test_dir("desktop-refresh");
+        let database = root.join("history.sqlite3");
+        let server = crate::config::Server {
+            host: "192.0.2.1".into(),
+            ..Default::default()
+        };
+        let mut store = Store::open(&database, false).unwrap();
+        let samples: Vec<_> = [1000., 2000., 3000.]
+            .into_iter()
+            .map(|utc| Sample {
+                host: server.host.clone(),
+                port: server.port,
+                status: "valid".into(),
+                utc,
+                offset_ms: utc / 1000.,
+                ..Default::default()
+            })
+            .collect();
+        let decision = serde_json::json!({"selected":server.key(),"servers":{server.key():{"status":"valid"}}});
+        store.save(1, &samples, &decision, &[]).unwrap();
+        drop(store);
+        let state = read_state(
+            &database,
+            std::slice::from_ref(&server),
+            String::new(),
+            1500.,
+        );
+        assert_eq!(state.selected, server.key());
+        assert_eq!(state.history, [[2000., 2.], [3000., 3.]]);
+        assert!(state.decision.unwrap().is_some());
+        std::fs::remove_dir_all(root).unwrap();
     }
 }

@@ -29,6 +29,15 @@ fn payload_text(value: rusqlite::types::ValueRef<'_>) -> rusqlite::Result<String
         _ => Err(rusqlite::Error::InvalidQuery),
     }
 }
+/// SQLITE_BUSY/SQLITE_LOCKED: another connection, such as an export, a report
+/// or any program reading the file, held the database past the busy timeout.
+pub fn is_busy(error: &anyhow::Error) -> bool {
+    matches!(
+        error.downcast_ref::<rusqlite::Error>(),
+        Some(rusqlite::Error::SqliteFailure(e, _))
+            if matches!(e.code, rusqlite::ErrorCode::DatabaseBusy | rusqlite::ErrorCode::DatabaseLocked)
+    )
+}
 fn compact_decision(value: &Value) -> Value {
     let mut value = value.clone();
     if let Some(object) = value.as_object_mut() {
@@ -92,12 +101,15 @@ impl Store {
         self.diagnostic_logging = cfg.diagnostic_logging;
     }
     pub fn event(&self, kind: &str, value: &Value) -> Result<()> {
+        self.event_at(utc(), kind, value)
+    }
+    pub fn event_at(&self, at: f64, kind: &str, value: &Value) -> Result<()> {
         if !self.logging_enabled {
             return Ok(());
         }
         self.db.execute(
             "INSERT INTO events(utc,kind,payload) VALUES(?,?,?)",
-            params![utc(), kind, value.to_string()],
+            params![at, kind, value.to_string()],
         )?;
         Ok(())
     }
@@ -140,6 +152,7 @@ impl Store {
             .optional()?;
         Ok(raw.map(|r| serde_json::from_str(&r)).transpose()?)
     }
+    #[cfg(test)]
     pub fn save(
         &mut self,
         cycle: i64,
@@ -147,12 +160,23 @@ impl Store {
         decision: &Value,
         states: &[(String, Value)],
     ) -> Result<()> {
+        self.save_cycles(&[(cycle, samples, decision)], states)
+    }
+    /// Saves one or more collection cycles in one transaction, each with its own
+    /// samples and decision; the last decision becomes the live state.
+    pub fn save_cycles(
+        &mut self,
+        cycles: &[(i64, &[Sample], &Value)],
+        states: &[(String, Value)],
+    ) -> Result<()> {
         let tx = self.db.transaction()?;
-        tx.execute(
-            "INSERT OR REPLACE INTO live_state(id,cycle,payload) VALUES(1,?,?)",
-            params![cycle, decision.to_string()],
-        )?;
-        if self.logging_enabled {
+        if let Some((cycle, _, decision)) = cycles.last() {
+            tx.execute(
+                "INSERT OR REPLACE INTO live_state(id,cycle,payload) VALUES(1,?,?)",
+                params![cycle, decision.to_string()],
+            )?;
+        }
+        for &(cycle, samples, decision) in cycles.iter().filter(|_| self.logging_enabled) {
             for s in samples {
                 let valid = s.status == "valid";
                 let mut data = s.data();
@@ -168,7 +192,7 @@ impl Store {
                 "INSERT INTO decisions(cycle,utc,selected,confidence,payload) VALUES(?,?,?,?,?)",
                 params![
                     cycle,
-                    utc(),
+                    decision["utc"].as_f64().unwrap_or_else(utc),
                     decision["selected"].as_str(),
                     decision["confidence"].as_str().unwrap_or(""),
                     if self.diagnostic_logging {
@@ -188,6 +212,14 @@ impl Store {
         }
         tx.commit()?;
         Ok(())
+    }
+    /// Re-enables sources a server stopped with a DENY/RSTR kiss-o'-death.
+    /// Applying settings is the operator review those sources wait for.
+    pub fn clear_disabled(&self) -> Result<usize> {
+        Ok(self.db.execute(
+            "UPDATE peer_state SET payload=json_set(payload,'$.disabled','') WHERE COALESCE(json_extract(payload,'$.disabled'),'')<>''",
+            [],
+        )?)
     }
     pub fn states(&self) -> Result<Vec<(String, Value)>> {
         let mut q = self.db.prepare("SELECT peer,payload FROM peer_state")?;
@@ -269,14 +301,26 @@ impl Store {
         {
             for journal in ["settings-update.json", "upgrade-state.json"] {
                 let path = root.join(journal);
-                if path.exists() {
-                    let state: Value = serde_json::from_slice(&std::fs::read(path)?)?;
-                    if state["phase"] == "prepared" {
-                        return Ok(
-                            serde_json::json!({"deferred":true,"reason":"Administrator transaction has not committed"}),
-                        );
-                    }
+                if !path.exists() {
+                    continue;
                 }
+                // An unreadable journal is treated like an uncommitted one: never
+                // purge on its account, and report it instead of failing each pass.
+                let reason = match std::fs::read(&path)
+                    .map_err(anyhow::Error::from)
+                    .and_then(|bytes| Ok(serde_json::from_slice::<Value>(&bytes)?))
+                {
+                    Ok(state) if state["phase"] == "prepared" => {
+                        "Administrator transaction has not committed".to_string()
+                    }
+                    Ok(_) => continue,
+                    Err(e) => format!("{journal} is unreadable: {e:#}"),
+                };
+                // Compression is lossless, so it still runs; purging waits.
+                let compressed = self.compress_before(utc() - 86400.)?;
+                return Ok(
+                    serde_json::json!({"deferred":true,"reason":reason,"compressed_records":compressed}),
+                );
             }
         }
         self.prune(days)?;
@@ -305,10 +349,11 @@ impl Store {
             serde_json::json!({"compressed_records":compressed,"space_reclaimed":reclaimed,"retention_days":days}),
         )
     }
-    pub fn history(&self, host: &str, port: u16) -> Result<Vec<[f64; 2]>> {
-        let mut q=self.db.prepare("SELECT utc,offset_ms FROM samples WHERE host=? AND port=? AND status='valid' ORDER BY utc,id")?;
+    /// Valid offsets for one source since `since` (Unix seconds; 0 for all).
+    pub fn history(&self, host: &str, port: u16, since: f64) -> Result<Vec<[f64; 2]>> {
+        let mut q=self.db.prepare("SELECT utc,offset_ms FROM samples WHERE host=? AND port=? AND status='valid' AND utc>=? ORDER BY utc,id")?;
         Ok(
-            q.query_map(params![host, port], |r| Ok([r.get(0)?, r.get(1)?]))?
+            q.query_map(params![host, port, since], |r| Ok([r.get(0)?, r.get(1)?]))?
                 .collect::<rusqlite::Result<Vec<_>>>()?,
         )
     }
@@ -374,11 +419,7 @@ mod tests {
     use serde_json::json;
     #[test]
     fn pending_settings_do_not_purge_history_before_administrator_commit() {
-        let root = std::env::current_dir().unwrap().join("work").join(format!(
-            "pending-retention-{}-{}",
-            std::process::id(),
-            utc().to_bits()
-        ));
+        let root = crate::test_dir("pending-retention");
         let path = root.join("data/history.sqlite3");
         let journal = root.join("settings-update.json");
         let mut store = Store::open(&path, false).unwrap();
@@ -408,6 +449,31 @@ mod tests {
         std::fs::remove_file(journal).unwrap();
         std::fs::remove_dir(root.join("data")).unwrap();
         std::fs::remove_dir(root).unwrap();
+    }
+    #[test]
+    fn malformed_journal_defers_purging_but_still_compresses() {
+        let root = crate::test_dir("malformed-journal");
+        let path = root.join("data/history.sqlite3");
+        let mut store = Store::open(&path, false).unwrap();
+        store
+            .db
+            .execute(
+                "INSERT INTO events(utc,kind,payload)VALUES(?,'old','{}')",
+                [utc() - 30. * 86400.],
+            )
+            .unwrap();
+        std::fs::write(root.join("upgrade-state.json"), b"{not json").unwrap();
+        let result = store.maintain(5.).unwrap();
+        assert_eq!(result["deferred"], true);
+        assert!(result["reason"].as_str().unwrap().contains("unreadable"));
+        assert_eq!(result["compressed_records"], 1);
+        let count: i64 = store
+            .db
+            .query_row("SELECT count(*) FROM events", [], |r| r.get(0))
+            .unwrap();
+        assert_eq!(count, 1);
+        drop(store);
+        std::fs::remove_dir_all(root).unwrap();
     }
     #[test]
     fn logging_off_keeps_live_status_and_restart_cycle_without_growing_history() {
@@ -551,15 +617,24 @@ mod tests {
         assert!(corrupt.is_err());
     }
     #[test]
+    fn clearing_disabled_sources_keeps_other_peer_state() {
+        let mut store = Store::open(Path::new(":memory:"), false).unwrap();
+        let states = [
+            (
+                "a:123".to_string(),
+                json!({"interval":64.,"disabled":"Server DENY"}),
+            ),
+            ("b:123".to_string(), json!({"interval":128.,"disabled":""})),
+        ];
+        store.save(1, &[], &json!({}), &states).unwrap();
+        assert_eq!(store.clear_disabled().unwrap(), 1);
+        let states: std::collections::HashMap<_, _> = store.states().unwrap().into_iter().collect();
+        assert_eq!(states["a:123"], json!({"interval":64.,"disabled":""}));
+        assert_eq!(states["b:123"]["interval"], 128.);
+    }
+    #[test]
     fn failed_measurements_do_not_bias_offsets_and_exports_keep_event_timing() {
-        let folder = std::env::current_dir().unwrap().join("work").join(format!(
-            "native-store-{}-{}",
-            std::process::id(),
-            std::time::SystemTime::now()
-                .duration_since(std::time::UNIX_EPOCH)
-                .unwrap()
-                .as_nanos()
-        ));
+        let folder = crate::test_dir("native-store");
         let database = folder.join("history.sqlite3");
         let mut store = Store::open(&database, false).unwrap();
         let sample = Sample {

@@ -14,6 +14,17 @@ mod storage;
 mod upgrade;
 mod validation;
 mod windows;
+/// A fresh folder under `work` for one test. Parallel tests in one process
+/// can read the same clock value, so a counter keeps the names distinct.
+#[cfg(test)]
+pub(crate) fn test_dir(prefix: &str) -> PathBuf {
+    static NEXT: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+    std::env::current_dir().unwrap().join("work").join(format!(
+        "{prefix}-{}-{}",
+        std::process::id(),
+        NEXT.fetch_add(1, std::sync::atomic::Ordering::Relaxed)
+    ))
+}
 use anyhow::{Result, ensure};
 use std::{
     path::PathBuf,

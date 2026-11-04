@@ -1,3 +1,9 @@
+## Unreleased
+
+- Sets the clock at once when the minimum number of independent source groups agree it is more than the tracking limit out, instead of recovering gradually over hours. Setting the time also updates the PC's hardware clock, so restarts no longer begin seconds off. The recovery limit setting is no longer used.
+- Opening the desktop again brings the running window forward instead of starting another copy; sign-in tray starts stay hidden.
+- Upgrades move preview installs to the NetTime Next Start menu folder.
+
 ## 1.0.1
 
 - Recovers gradually from larger offsets after three new agreeing filter samples, keeping the configured rate limit and ownership/holdover safeguards.

@@ -122,20 +122,205 @@ pub fn utc_label(utc: f64) -> String {
     )
 }
 
-/// Replace inherited/user-created ACLs before trusting machine configuration.
-pub fn protect_service_files(root: &Path, account: &str) -> Result<()> {
+fn sid_string(sid: *mut std::ffi::c_void) -> Result<String> {
+    use windows_sys::Win32::{
+        Foundation::LocalFree, Security::Authorization::ConvertSidToStringSidW,
+    };
+    let mut text = std::ptr::null_mut();
+    check(unsafe { ConvertSidToStringSidW(sid, &mut text) })?;
+    let mut length = 0;
+    while unsafe { *text.add(length) } != 0 {
+        length += 1;
+    }
+    let value = String::from_utf16_lossy(unsafe { std::slice::from_raw_parts(text, length) });
+    unsafe {
+        LocalFree(text.cast());
+    }
+    Ok(value)
+}
+/// Owner SID of a file or folder, without following reparse points.
+fn owner(path: &Path) -> Result<String> {
+    use windows_sys::Win32::{
+        Foundation::LocalFree,
+        Security::{
+            Authorization::{GetNamedSecurityInfoW, SE_FILE_OBJECT},
+            OWNER_SECURITY_INFORMATION,
+        },
+    };
+    let (mut sid, mut sd) = (std::ptr::null_mut(), std::ptr::null_mut());
+    let status = unsafe {
+        GetNamedSecurityInfoW(
+            wide(path).as_ptr(),
+            SE_FILE_OBJECT,
+            OWNER_SECURITY_INFORMATION,
+            &mut sid,
+            std::ptr::null_mut(),
+            std::ptr::null_mut(),
+            std::ptr::null_mut(),
+            &mut sd,
+        )
+    };
+    ensure!(
+        status == 0 && !sid.is_null(),
+        "Cannot read owner of {}: Windows error {status}",
+        path.display()
+    );
+    let result = sid_string(sid);
+    unsafe {
+        LocalFree(sd);
+    }
+    result
+}
+/// Owners a standard user cannot impersonate: SYSTEM, Administrators,
+/// LocalService and NT SERVICE accounts (this service, TrustedInstaller).
+fn trusted_owner(sid: &str) -> bool {
+    ["S-1-5-18", "S-1-5-32-544", "S-1-5-19"].contains(&sid) || sid.starts_with("S-1-5-80-")
+}
+/// The first entry under `root`, or `root` itself, that a standard user could
+/// have created or redirected: a reparse point or an untrusted owner.
+fn untrusted_entry(root: &Path) -> Result<Option<std::path::PathBuf>> {
+    use std::os::windows::fs::MetadataExt;
+    let metadata = std::fs::symlink_metadata(root)?;
+    if metadata.file_attributes() & 0x400 != 0 || !trusted_owner(&owner(root)?) {
+        return Ok(Some(root.into()));
+    }
+    if metadata.is_dir() {
+        for entry in std::fs::read_dir(root)? {
+            if let Some(found) = untrusted_entry(&entry?.path())? {
+                return Ok(Some(found));
+            }
+        }
+    }
+    Ok(None)
+}
+/// Runs before installation on a machine without the service. ProgramData lets
+/// standard users create folders, so a pre-existing data folder may hold a
+/// planted settings.json or ownership journal. Such a folder is moved aside
+/// unread; the folder is then locked so only administrators can write to it.
+pub fn secure_data_root(root: &Path) -> Result<Option<std::path::PathBuf>> {
+    enable_privilege("SeRestorePrivilege")?;
+    enable_privilege("SeTakeOwnershipPrivilege")?;
+    let mut moved = None;
+    if std::fs::symlink_metadata(root).is_ok() && untrusted_entry(root)?.is_some() {
+        let name = root
+            .file_name()
+            .ok_or_else(|| anyhow::anyhow!("Invalid data folder"))?
+            .to_string_lossy();
+        let aside = root.with_file_name(format!(
+            "{name}.untrusted-{}",
+            crate::protocol::utc() as u64
+        ));
+        std::fs::rename(root, &aside)?;
+        moved = Some(aside);
+    }
+    lock_folders(root, "")?;
+    Ok(moved)
+}
+fn apply_acl(path: &Path, sddl: &str) -> Result<()> {
     use std::os::windows::fs::MetadataExt;
     use windows_sys::Win32::{
         Foundation::LocalFree,
         Security::{
             Authorization::{
-                ConvertSidToStringSidW, ConvertStringSecurityDescriptorToSecurityDescriptorW,
-                SE_FILE_OBJECT, SetNamedSecurityInfoW,
+                ConvertStringSecurityDescriptorToSecurityDescriptorW, SE_FILE_OBJECT,
+                SetNamedSecurityInfoW,
             },
             DACL_SECURITY_INFORMATION, GetSecurityDescriptorDacl, GetSecurityDescriptorOwner,
-            LookupAccountNameW, OWNER_SECURITY_INFORMATION, PROTECTED_DACL_SECURITY_INFORMATION,
+            OWNER_SECURITY_INFORMATION, PROTECTED_DACL_SECURITY_INFORMATION,
         },
     };
+    ensure!(
+        std::fs::symlink_metadata(path)?.file_attributes() & 0x400 == 0,
+        "Service paths must not be reparse points: {}",
+        path.display()
+    );
+    unsafe {
+        let mut sd = std::ptr::null_mut();
+        check(ConvertStringSecurityDescriptorToSecurityDescriptorW(
+            wide(sddl).as_ptr(),
+            1,
+            &mut sd,
+            std::ptr::null_mut(),
+        ))?;
+        let (mut present, mut defaulted, mut acl, mut owner) =
+            (0, 0, std::ptr::null_mut(), std::ptr::null_mut());
+        let result = (|| -> Result<()> {
+            check(GetSecurityDescriptorDacl(
+                sd,
+                &mut present,
+                &mut acl,
+                &mut defaulted,
+            ))?;
+            check(GetSecurityDescriptorOwner(sd, &mut owner, &mut defaulted))?;
+            ensure!(
+                present != 0 && !acl.is_null() && !owner.is_null(),
+                "Service ACL/owner is missing"
+            );
+            let status = SetNamedSecurityInfoW(
+                wide(path).as_ptr(),
+                SE_FILE_OBJECT,
+                OWNER_SECURITY_INFORMATION
+                    | DACL_SECURITY_INFORMATION
+                    | PROTECTED_DACL_SECURITY_INFORMATION,
+                owner,
+                std::ptr::null_mut(),
+                acl,
+                std::ptr::null_mut(),
+            );
+            ensure!(
+                status == 0,
+                "Cannot protect service path {}: Windows error {status}",
+                path.display()
+            );
+            Ok(())
+        })();
+        LocalFree(sd);
+        result
+    }
+}
+/// Protected ACLs for the data root and `data`; `account` adds the service
+/// account's ACEs once the service exists.
+fn lock_folders(root: &Path, account: &str) -> Result<()> {
+    use std::os::windows::fs::MetadataExt;
+    let read = format!(
+        "O:BAD:P(A;OICI;FA;;;SY)(A;OICI;FA;;;BA)(A;OICI;FRFX;;;BU)(A;OICI;FRFX;;;LS){}",
+        if account.is_empty() {
+            String::new()
+        } else {
+            format!("(A;OICI;FRFX;;;{account})")
+        }
+    );
+    let data = format!(
+        "O:BAD:P(A;OICI;FA;;;SY)(A;OICI;FA;;;BA)(A;OICI;FRFX;;;BU)(A;OICI;0x1301bf;;;LS){}",
+        if account.is_empty() {
+            String::new()
+        } else {
+            format!("(A;OICI;0x1301bf;;;{account})")
+        }
+    );
+    std::fs::create_dir_all(root)?;
+    apply_acl(root, &read)?;
+    let folder = root.join("data");
+    std::fs::create_dir_all(&folder)?;
+    apply_acl(&folder, &data)?;
+    for (directory, acl) in [(root, &read), (folder.as_path(), &data)] {
+        for entry in std::fs::read_dir(directory)? {
+            let entry = entry?;
+            let metadata = entry.path().symlink_metadata()?;
+            ensure!(
+                metadata.file_attributes() & 0x400 == 0,
+                "Service paths must not contain reparse points"
+            );
+            if metadata.is_file() {
+                apply_acl(&entry.path(), acl)?;
+            }
+        }
+    }
+    Ok(())
+}
+/// Replace inherited/user-created ACLs before trusting machine configuration.
+pub fn protect_service_files(root: &Path, account: &str) -> Result<()> {
+    use windows_sys::Win32::Security::LookupAccountNameW;
     enable_privilege("SeRestorePrivilege")?;
     enable_privilege("SeTakeOwnershipPrivilege")?;
     let name = wide(account);
@@ -165,95 +350,41 @@ pub fn protect_service_files(root: &Path, account: &str) -> Result<()> {
             &mut kind,
         )
     })?;
-    let mut text = std::ptr::null_mut();
-    check(unsafe { ConvertSidToStringSidW(sid.as_ptr().cast_mut().cast(), &mut text) })?;
-    let mut length = 0;
-    while unsafe { *text.add(length) } != 0 {
-        length += 1;
-    }
-    let account_sid = String::from_utf16_lossy(unsafe { std::slice::from_raw_parts(text, length) });
-    unsafe {
-        LocalFree(text.cast());
-    }
-    fn apply(path: &Path, sddl: &str) -> Result<()> {
-        use std::os::windows::fs::MetadataExt;
-        ensure!(
-            std::fs::symlink_metadata(path)?.file_attributes() & 0x400 == 0,
-            "Service paths must not be reparse points: {}",
-            path.display()
-        );
-        unsafe {
-            let mut sd = std::ptr::null_mut();
-            check(ConvertStringSecurityDescriptorToSecurityDescriptorW(
-                wide(sddl).as_ptr(),
-                1,
-                &mut sd,
-                std::ptr::null_mut(),
-            ))?;
-            let (mut present, mut defaulted, mut acl, mut owner) =
-                (0, 0, std::ptr::null_mut(), std::ptr::null_mut());
-            let result = (|| -> Result<()> {
-                check(GetSecurityDescriptorDacl(
-                    sd,
-                    &mut present,
-                    &mut acl,
-                    &mut defaulted,
-                ))?;
-                check(GetSecurityDescriptorOwner(sd, &mut owner, &mut defaulted))?;
-                ensure!(
-                    present != 0 && !acl.is_null() && !owner.is_null(),
-                    "Service ACL/owner is missing"
-                );
-                let status = SetNamedSecurityInfoW(
-                    wide(path).as_ptr(),
-                    SE_FILE_OBJECT,
-                    OWNER_SECURITY_INFORMATION
-                        | DACL_SECURITY_INFORMATION
-                        | PROTECTED_DACL_SECURITY_INFORMATION,
-                    owner,
-                    std::ptr::null_mut(),
-                    acl,
-                    std::ptr::null_mut(),
-                );
-                ensure!(
-                    status == 0,
-                    "Cannot protect service path {}: Windows error {status}",
-                    path.display()
-                );
-                Ok(())
-            })();
-            LocalFree(sd);
-            result
-        }
-    }
-    let read = format!(
-        "O:BAD:P(A;OICI;FA;;;SY)(A;OICI;FA;;;BA)(A;OICI;FRFX;;;BU)(A;OICI;FRFX;;;LS)(A;OICI;FRFX;;;{account_sid})"
-    );
-    let data = format!(
-        "O:BAD:P(A;OICI;FA;;;SY)(A;OICI;FA;;;BA)(A;OICI;FRFX;;;BU)(A;OICI;0x1301bf;;;LS)(A;OICI;0x1301bf;;;{account_sid})"
-    );
-    std::fs::create_dir_all(root)?;
-    apply(root, &read)?;
-    let folder = root.join("data");
-    std::fs::create_dir_all(&folder)?;
-    apply(&folder, &data)?;
-    for (directory, acl) in [(root, &read), (folder.as_path(), &data)] {
-        for entry in std::fs::read_dir(directory)? {
-            let entry = entry?;
-            let metadata = entry.path().symlink_metadata()?;
-            ensure!(
-                metadata.file_attributes() & 0x400 == 0,
-                "Service paths must not contain reparse points"
-            );
-            if metadata.is_file() {
-                apply(&entry.path(), acl)?;
-            }
-        }
-    }
-    Ok(())
+    let account_sid = sid_string(sid.as_mut_ptr().cast())?;
+    lock_folders(root, &account_sid)
 }
 #[cfg(test)]
 mod tests {
+    use super::*;
+    #[test]
+    fn only_privileged_owners_are_trusted() {
+        for sid in [
+            "S-1-5-18",
+            "S-1-5-32-544",
+            "S-1-5-19",
+            "S-1-5-80-956008885-3418522649",
+        ] {
+            assert!(trusted_owner(sid), "{sid}");
+        }
+        for sid in ["S-1-5-21-1-2-3-1001", "S-1-5-32-545", "S-1-1-0", "S-1-5-11"] {
+            assert!(!trusted_owner(sid), "{sid}");
+        }
+    }
+    #[test]
+    fn folder_created_by_this_user_is_untrusted_unless_elevated() {
+        let root = crate::test_dir("untrusted");
+        std::fs::create_dir_all(root.join("data")).unwrap();
+        std::fs::write(root.join("settings.json"), b"{}").unwrap();
+        let planted = root.join("data").join("settings-update.json");
+        std::fs::write(&planted, b"{}").unwrap();
+        // An elevated test run creates files owned by Administrators.
+        if trusted_owner(&owner(&planted).unwrap()) {
+            assert_eq!(untrusted_entry(&root).unwrap(), None);
+        } else {
+            assert!(untrusted_entry(&root).unwrap().is_some());
+        }
+        std::fs::remove_dir_all(root).unwrap();
+    }
     #[test]
     fn utc_is_explicit_and_independent_of_local_timezone() {
         assert_eq!(super::utc_label(0.), "1970-01-01 00:00:00 UTC");

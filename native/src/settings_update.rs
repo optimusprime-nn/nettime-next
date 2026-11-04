@@ -177,6 +177,7 @@ pub fn apply(
     // A draft can neither grant takeover nor revoke an existing transaction.
     next.clock.mode = if owned { "slew" } else { "observe" }.into();
     if owned {
+        next.validate_correction()?;
         ensure!(
             old.clock.mode == "slew" && own.running && ownership::guard(root, backend)?,
             "Active clock ownership must be healthy before applying settings"
@@ -210,6 +211,8 @@ pub fn apply(
             &root.join("settings.json"),
             &serde_json::to_vec_pretty(&next)?,
         )?;
+        // The collector is stopped, so its peer state can be changed safely.
+        Store::open(&root.join("data/history.sqlite3"), false)?.clear_disabled()?;
         if update.service.running {
             backend.change(service::NAME, true)?;
         }
@@ -276,11 +279,7 @@ mod tests {
         }
     }
     fn fixture() -> (std::path::PathBuf, Config, Backend) {
-        let root = std::env::current_dir().unwrap().join("work").join(format!(
-            "nettime-settings-{}-{}",
-            std::process::id(),
-            crate::protocol::utc().to_bits()
-        ));
+        let root = crate::test_dir("nettime-settings");
         std::fs::create_dir_all(root.join("data")).unwrap();
         Store::open(&root.join("data/history.sqlite3"), false).unwrap();
         let own = Snapshot {
@@ -311,6 +310,7 @@ mod tests {
             previous_config: b"original takeover snapshot".to_vec(),
             privilege_preexisting: false,
             clock_started: true,
+            pending_stop: vec![],
         };
         atomic_write(
             &root.join("clock-ownership.json"),

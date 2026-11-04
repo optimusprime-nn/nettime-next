@@ -1,8 +1,8 @@
 use crate::{config::Server, nts::NtsClient};
-use anyhow::{Result, ensure};
+use anyhow::{Result, bail, ensure};
 use serde::{Deserialize, Serialize};
 use std::{
-    net::{ToSocketAddrs, UdpSocket},
+    net::{SocketAddr, ToSocketAddrs, UdpSocket},
     sync::OnceLock,
     time::{Duration, Instant, SystemTime, UNIX_EPOCH},
 };
@@ -134,10 +134,9 @@ pub fn parse(raw: &[u8], stamp: &[u8], s: &mut Sample) -> Result<()> {
         "Local clock changed during exchange"
     );
     let delay = (s.t4 - s.t1) - (s.t3 - s.t2);
-    ensure!(
-        delay >= -0.001_f64.max(2_f64.powi((s.precision as i32).clamp(-32, 0))),
-        "Impossible negative round-trip delay"
-    );
+    // A fixed 1 ms allowance for timestamp rounding. The server's self-reported
+    // precision (up to 1 s) must not widen what counts as a possible delay.
+    ensure!(delay >= -0.001, "Impossible negative round-trip delay");
     s.delay_ms = (delay * 1000.).max(0.);
     s.offset_ms = ((s.t2 - s.t1) + (s.t3 - s.t4)) * 500.;
     s.status = "valid".into();
@@ -148,6 +147,38 @@ pub fn parse(raw: &[u8], stamp: &[u8], s: &mut Sample) -> Result<()> {
     }
     .into();
     Ok(())
+}
+/// Resolves a host name within `timeout`. The system resolver cannot be
+/// cancelled, so a lookup that outlasts the timeout finishes on its own thread
+/// and its result is discarded; the poll fails instead of waiting for it.
+pub fn resolve(host: &str, port: u16, timeout: f64) -> Result<Vec<SocketAddr>> {
+    if let Ok(ip) = host.parse::<std::net::IpAddr>() {
+        return Ok(vec![SocketAddr::new(ip, port)]);
+    }
+    let host = host.to_owned();
+    resolve_with(timeout, move || {
+        Ok((host.as_str(), port).to_socket_addrs()?.collect())
+    })
+}
+fn resolve_with(
+    timeout: f64,
+    lookup: impl FnOnce() -> Result<Vec<SocketAddr>> + Send + 'static,
+) -> Result<Vec<SocketAddr>> {
+    let (tx, rx) = std::sync::mpsc::channel();
+    std::thread::spawn(move || {
+        let _ = tx.send(lookup());
+    });
+    rx.recv_timeout(Duration::from_secs_f64(timeout))
+        .map_err(|_| anyhow::anyhow!("Name resolution timed out"))?
+}
+/// The request's transmit timestamp, which the reply must echo. Its low 24
+/// fraction bits (under 4 ms) are random, so an off-path attacker cannot guess
+/// it from the send time; with only 8 random bits a spoofed plain-NTP reply
+/// had a 1-in-256 chance per guess.
+fn origin_stamp(t1: f64) -> Result<[u8; 8]> {
+    let mut stamp = encode(t1);
+    getrandom::fill(&mut stamp[5..]).map_err(|e| anyhow::anyhow!("Random source: {e}"))?;
+    Ok(stamp)
 }
 pub fn query(server: &Server, timeout: f64, poll: f64, client: &mut NtsClient) -> Sample {
     let mut s = Sample {
@@ -165,10 +196,13 @@ pub fn query(server: &Server, timeout: f64, poll: f64, client: &mut NtsClient) -
         .into(),
         ..Default::default()
     };
+    let mut prepared = false;
+    let mut resolved = false;
     let result = (|| -> Result<()> {
         let secure = server.security == "nts_required";
         if secure {
             client.prepare(server, timeout)?;
+            prepared = true;
         }
         let (host, port) = if secure {
             let n = client.session.as_ref().unwrap();
@@ -176,10 +210,11 @@ pub fn query(server: &Server, timeout: f64, poll: f64, client: &mut NtsClient) -
         } else {
             (server.host.clone(), server.port)
         };
-        let endpoint = (host.as_str(), port)
-            .to_socket_addrs()?
-            .next()
+        let addresses = resolve(&host, port, timeout)?;
+        let endpoint = *addresses
+            .get(client.address_cursor % addresses.len().max(1))
             .ok_or_else(|| anyhow::anyhow!("No resolved address"))?;
+        resolved = true;
         let socket = UdpSocket::bind(if endpoint.is_ipv6() {
             "[::]:0"
         } else {
@@ -197,8 +232,7 @@ pub fn query(server: &Server, timeout: f64, poll: f64, client: &mut NtsClient) -
         header[3] = (-20i8) as u8;
         s.t1 = utc();
         let start = mono();
-        let mut stamp = encode(s.t1);
-        getrandom::fill(&mut stamp[7..]).map_err(|e| anyhow::anyhow!("Random source: {e}"))?;
+        let stamp = origin_stamp(s.t1)?;
         header[40..48].copy_from_slice(&stamp);
         s.request_hex = hex::encode(header);
         s.request_transmit_utc = decode(&stamp, s.t1);
@@ -215,36 +249,82 @@ pub fn query(server: &Server, timeout: f64, poll: f64, client: &mut NtsClient) -
         };
         socket.send(&request)?;
         let mut buffer = [0u8; 65536];
-        let size = socket.recv(&mut buffer)?;
-        s.t4 = utc();
-        s.exchange_ms = (mono() - start) * 1000.;
-        s.clock_step_ms = (s.t4 - s.t1) * 1000. - s.exchange_ms;
-        s.utc = s.t4;
-        s.mono = mono();
-        s.reply_hex = hex::encode(&buffer[..size.min(48)]);
-        if secure {
-            let n = client.session.as_mut().unwrap();
-            n.verify(&buffer[..size], &uid, cookie_limit)?;
-            s.authentication_status = "authenticated".into();
-            s.nts_ke_host = server.host.clone();
-            s.nts_ke_port = server.nts_ke_port;
-            s.tls_version = "TLSv1.3".into();
-            s.nts_session_age_seconds = mono() - n.established;
-            s.nts_cookie_count = n.cookies.len();
-            s.certificate_sha256 = n.fingerprint.clone();
-            ensure!(size >= 48, "Truncated authenticated NTP header");
-            parse(&buffer[..48], &stamp, &mut s)?;
-            client.failures = 0;
-            client.retry_at = 0.;
-        } else {
-            parse(&buffer[..size], &stamp, &mut s)?;
+        // A datagram that is not this request's reply (wrong originate
+        // timestamp, or failed NTS authentication) is discarded and the wait
+        // continues, so a stray or spoofed packet cannot fail the poll.
+        let mut discarded = 0;
+        let mut last_discard = String::new();
+        let unmatched = |discarded: usize, last: &str| {
+            anyhow::anyhow!("No matching reply; discarded {discarded} datagrams ({last})")
+        };
+        loop {
+            let remaining = timeout - (mono() - start);
+            if remaining <= 0. {
+                return Err(unmatched(discarded, &last_discard));
+            }
+            socket.set_read_timeout(Some(Duration::from_secs_f64(remaining.max(0.001))))?;
+            let size = match socket.recv(&mut buffer) {
+                Ok(size) => size,
+                Err(e)
+                    if discarded > 0
+                        && matches!(
+                            e.kind(),
+                            std::io::ErrorKind::WouldBlock | std::io::ErrorKind::TimedOut
+                        ) =>
+                {
+                    return Err(unmatched(discarded, &last_discard));
+                }
+                Err(e) => bail!(e),
+            };
+            s.t4 = utc();
+            s.exchange_ms = (mono() - start) * 1000.;
+            s.clock_step_ms = (s.t4 - s.t1) * 1000. - s.exchange_ms;
+            s.utc = s.t4;
+            s.mono = mono();
+            s.reply_hex = hex::encode(&buffer[..size.min(48)]);
+            if secure {
+                let n = client.session.as_mut().unwrap();
+                if let Err(e) = n.verify(&buffer[..size], &uid, cookie_limit) {
+                    discarded += 1;
+                    last_discard = e.to_string();
+                    continue;
+                }
+                s.authentication_status = "authenticated".into();
+                s.nts_ke_host = server.host.clone();
+                s.nts_ke_port = server.nts_ke_port;
+                s.tls_version = "TLSv1.3".into();
+                s.nts_session_age_seconds = mono() - n.established;
+                s.nts_cookie_count = n.cookies.len();
+                s.certificate_sha256 = n.fingerprint.clone();
+                ensure!(size >= 48, "Truncated authenticated NTP header");
+                parse(&buffer[..48], &stamp, &mut s)?;
+                client.exchange_succeeded();
+            } else {
+                if size < 32 || buffer[24..32] != stamp {
+                    discarded += 1;
+                    last_discard = "Originate mismatch".into();
+                    continue;
+                }
+                parse(&buffer[..size], &stamp, &mut s)?;
+            }
+            return Ok(());
         }
-        Ok(())
     })();
+    if result.is_ok() {
+        client.address_failures = 0;
+    }
     if let Err(e) = result {
         s.reason = e.to_string();
-        if server.security == "nts_required" && s.authentication_status != "authenticated" {
-            client.failed();
+        if resolved {
+            client.address_failures += 1;
+            if client.address_failures >= 2 {
+                client.address_failures = 0;
+                client.address_cursor = client.address_cursor.wrapping_add(1);
+            }
+        }
+        // Key-establishment failures are counted inside prepare.
+        if prepared && s.authentication_status != "authenticated" {
+            client.exchange_failed();
         }
     }
     s
@@ -254,10 +334,59 @@ pub fn query(server: &Server, timeout: f64, poll: f64, client: &mut NtsClient) -
 mod tests {
     use super::*;
     #[test]
+    fn slow_name_resolution_fails_within_the_timeout() {
+        let started = Instant::now();
+        let error = resolve_with(0.2, || {
+            std::thread::sleep(Duration::from_secs(5));
+            Ok(vec![])
+        })
+        .unwrap_err();
+        assert!(started.elapsed() < Duration::from_secs(2));
+        assert_eq!(error.to_string(), "Name resolution timed out");
+        let literal = resolve("192.0.2.1", 123, 0.2).unwrap();
+        assert_eq!(literal, ["192.0.2.1:123".parse::<SocketAddr>().unwrap()]);
+    }
+    #[test]
     fn era_round_trip() {
         for t in [0., 1730000000.125, 2085978497.5, 4100000000.25] {
             assert!((decode(&encode(t), t) - t).abs() < 0.000001)
         }
+    }
+    fn reply_with_delay(delay: f64, precision: i8) -> Result<()> {
+        let at = 1_800_000_000.;
+        let stamp = encode(at);
+        let mut raw = [0u8; 48];
+        raw[0] = 0x24;
+        raw[1] = 2;
+        raw[3] = precision as u8;
+        raw[16..24].copy_from_slice(&encode(at - 1.));
+        raw[24..32].copy_from_slice(&stamp);
+        raw[32..40].copy_from_slice(&encode(at));
+        raw[40..48].copy_from_slice(&encode(at));
+        let mut s = Sample {
+            t1: at,
+            t4: at + delay,
+            ..Default::default()
+        };
+        parse(&raw, &stamp, &mut s)
+    }
+    #[test]
+    fn origin_timestamp_is_unpredictable_but_close() {
+        let at = 1_800_000_000.25;
+        let stamps: std::collections::HashSet<_> =
+            (0..64).map(|_| origin_stamp(at).unwrap()).collect();
+        assert_eq!(stamps.len(), 64);
+        for stamp in stamps {
+            assert_eq!(stamp[..5], encode(at)[..5]);
+            assert!((decode(&stamp, at) - at).abs() < 0.004);
+        }
+    }
+    #[test]
+    fn coarse_server_precision_does_not_allow_large_negative_delay() {
+        assert!(reply_with_delay(-0.5, 0).is_err());
+        assert!(reply_with_delay(-0.01, -6).is_err());
+        reply_with_delay(-0.0005, 0).unwrap();
+        reply_with_delay(0.02, -20).unwrap();
     }
     #[test]
     fn replay_and_unsynchronized_rejected() {
@@ -269,6 +398,176 @@ mod tests {
         raw[24..32].copy_from_slice(&[1; 8]);
         raw[0] |= 0xc0;
         assert!(parse(&raw, &[1; 8], &mut s).is_err());
+    }
+    /// An NTS-KE endpoint on loopback that closes every connection before TLS.
+    fn refusing_key_exchange() -> Server {
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let port = listener.local_addr().unwrap().port();
+        std::thread::spawn(move || {
+            for stream in listener.incoming() {
+                drop(stream);
+            }
+        });
+        Server {
+            host: "127.0.0.1".into(),
+            nts_ke_port: port,
+            security: "nts_required".into(),
+            ..Default::default()
+        }
+    }
+    #[test]
+    fn polls_during_nts_backoff_do_not_extend_it() {
+        let server = refusing_key_exchange();
+        let mut client = NtsClient::default();
+        let first = query(&server, 2., 64., &mut client);
+        assert_eq!(first.status, "error");
+        assert_eq!(client.failures, 1);
+        let retry_at = client.retry_at;
+        assert!(retry_at > mono());
+        for _ in 0..20 {
+            let refused = query(&server, 2., 64., &mut client);
+            assert_eq!(refused.reason, "NTS key establishment backoff");
+            assert_eq!(refused.authentication_status, "failed");
+        }
+        assert_eq!(client.failures, 1);
+        assert_eq!(client.retry_at, retry_at);
+    }
+    #[test]
+    fn nts_backoff_is_bounded() {
+        let server = refusing_key_exchange();
+        let mut client = NtsClient {
+            failures: 29,
+            ..Default::default()
+        };
+        query(&server, 2., 64., &mut client);
+        assert_eq!(client.failures, 30);
+        assert!(client.retry_at - mono() <= crate::nts::MAX_BACKOFF);
+    }
+    /// A loopback NTP server that first sends `junk` stray datagrams, then a
+    /// valid reply if `answer` is set.
+    fn stray_then_reply(junk: usize, answer: bool) -> Server {
+        let socket = UdpSocket::bind("127.0.0.1:0").unwrap();
+        let port = socket.local_addr().unwrap().port();
+        std::thread::spawn(move || {
+            let mut request = [0u8; 1024];
+            let (_, client) = socket.recv_from(&mut request).unwrap();
+            let now = encode(utc());
+            let mut reply = [0u8; 48];
+            reply[0] = 0x24;
+            reply[1] = 2;
+            reply[16..24].copy_from_slice(&encode(utc() - 1.));
+            reply[32..40].copy_from_slice(&now);
+            reply[40..48].copy_from_slice(&now);
+            for _ in 0..junk {
+                socket.send_to(&reply, client).unwrap();
+            }
+            if answer {
+                reply[24..32].copy_from_slice(&request[40..48]);
+                socket.send_to(&reply, client).unwrap();
+            }
+        });
+        Server {
+            host: "127.0.0.1".into(),
+            port,
+            ..Default::default()
+        }
+    }
+    #[test]
+    fn failed_poll_moves_to_the_next_resolved_address() {
+        // "localhost" resolves to ::1 and 127.0.0.1 in either order; only
+        // 127.0.0.1 answers. Each address gets two polls before the next.
+        let socket = UdpSocket::bind("127.0.0.1:0").unwrap();
+        let port = socket.local_addr().unwrap().port();
+        std::thread::spawn(move || {
+            let mut request = [0u8; 1024];
+            while let Ok((_, client)) = socket.recv_from(&mut request) {
+                let now = encode(utc());
+                let mut reply = [0u8; 48];
+                reply[0] = 0x24;
+                reply[1] = 2;
+                reply[16..24].copy_from_slice(&encode(utc() - 1.));
+                reply[24..32].copy_from_slice(&request[40..48]);
+                reply[32..40].copy_from_slice(&now);
+                reply[40..48].copy_from_slice(&now);
+                socket.send_to(&reply, client).unwrap();
+            }
+        });
+        let server = Server {
+            host: "localhost".into(),
+            port,
+            ..Default::default()
+        };
+        let resolved = ("localhost", port).to_socket_addrs().unwrap().count();
+        let mut client = NtsClient::default();
+        let polls: Vec<_> = (0..2 * resolved)
+            .map(|_| query(&server, 0.3, 64., &mut client))
+            .collect();
+        assert!(
+            polls
+                .iter()
+                .any(|s| s.status == "valid" && s.address == "127.0.0.1"),
+            "{:?}",
+            polls.iter().map(|s| &s.reason).collect::<Vec<_>>()
+        );
+        // A working address is kept.
+        let cursor = client.address_cursor;
+        if polls.last().unwrap().status == "valid" {
+            assert_eq!(query(&server, 0.3, 64., &mut client).status, "valid");
+            assert_eq!(client.address_cursor, cursor);
+        }
+    }
+    #[test]
+    fn stray_datagrams_are_discarded_not_fatal() {
+        let sample = query(
+            &stray_then_reply(2, true),
+            2.,
+            64.,
+            &mut NtsClient::default(),
+        );
+        assert_eq!(sample.status, "valid", "{}", sample.reason);
+        assert_eq!(sample.stratum, 2);
+    }
+    #[test]
+    fn only_stray_datagrams_time_out_with_their_reason() {
+        let sample = query(
+            &stray_then_reply(1, false),
+            0.3,
+            64.,
+            &mut NtsClient::default(),
+        );
+        assert_eq!(sample.status, "error");
+        assert!(sample.reason.contains("discarded 1"), "{}", sample.reason);
+        assert!(
+            sample.reason.contains("Originate mismatch"),
+            "{}",
+            sample.reason
+        );
+    }
+    #[test]
+    fn lost_nts_reply_keeps_session_until_repeated() {
+        // A bound socket that never answers: every exchange times out.
+        let silent = UdpSocket::bind("127.0.0.1:0").unwrap();
+        let port = silent.local_addr().unwrap().port();
+        let server = Server {
+            host: "127.0.0.1".into(),
+            security: "nts_required".into(),
+            ..Default::default()
+        };
+        let mut client = NtsClient {
+            session: Some(crate::nts::Session::for_test("127.0.0.1", port, 8)),
+            ..Default::default()
+        };
+        for lost in 1..crate::nts::MAX_MISSES {
+            let sample = query(&server, 0.2, 64., &mut client);
+            assert_eq!(sample.status, "error");
+            let session = client.session.as_ref().expect("session kept");
+            assert_eq!(session.cookies.len(), 8 - lost as usize);
+            assert_eq!(client.failures, 0);
+            assert_eq!(client.retry_at, 0.);
+        }
+        query(&server, 0.2, 64., &mut client);
+        assert!(client.session.is_none());
+        assert_eq!(client.failures, 1);
     }
     #[test]
     #[ignore = "Explicit external NTS interoperability check; two volleys 65 seconds apart"]

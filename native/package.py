@@ -6,6 +6,7 @@ import os
 from pathlib import Path
 import shutil
 import subprocess
+import sys
 import tomllib
 from check_privacy import verify as verify_privacy
 
@@ -14,6 +15,12 @@ ROOT = Path(__file__).resolve().parent
 def run(*args, capture=False):
     return subprocess.run(list(map(str,args)), cwd=ROOT, check=True, text=True,
                           capture_output=capture).stdout
+
+def source_dirty():
+    # Untracked files count: an uncommitted new module can be compiled into the
+    # release while the manifest claims an exact, clean source revision.
+    # Ignored and locally excluded files (build output, private notes) do not.
+    return bool(run('git','status','--porcelain','--untracked-files=normal',capture=True))
 
 def main():
     parser=argparse.ArgumentParser()
@@ -40,6 +47,7 @@ def main():
     run(cargo,'fmt','--check')
     run(cargo,'test','--locked')
     run(cargo,'build','--release','--locked')
+    run(sys.executable,'-m','unittest','-q','test_check_imports')
     from check_imports import verify
     for name in ('NetTimeNextNative.exe','NetTimeNextNativeService.exe'):
         verify(ROOT/'target'/'release'/name)
@@ -71,7 +79,7 @@ def main():
     manifest=dict(version='1.0.1',stage='Bounded automatic clock recovery',installer=installer.name,
                   sha256=hashlib.sha256(installer.read_bytes()).hexdigest(),
                   source_commit=run('git','rev-parse','HEAD',capture=True).strip(),
-                  source_dirty=bool(run('git','status','--porcelain','--untracked-files=no',capture=True)),
+                  source_dirty=source_dirty(),
                   rustc=run(Path(cargo).with_name('rustc.exe') if Path(cargo).is_absolute() else 'rustc','--version',capture=True).strip(),
                   crt_linkage='static',runtime_imports_check='passed',signed=False)
     (installer.parent/'build-manifest.json').write_text(json.dumps(manifest,indent=2)+'\n',encoding='utf-8')
