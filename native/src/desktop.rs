@@ -1,4 +1,5 @@
 mod dashboard;
+mod instance;
 mod panels;
 mod reports;
 mod settings;
@@ -42,6 +43,8 @@ struct Desktop {
     _exit: MenuItem,
     actions: Arc<Mutex<Vec<tray::Action>>>,
     hidden: bool,
+    /// Started at sign-in with --tray: hide the window eframe shows after frame one.
+    start_in_tray: bool,
     smoke: bool,
     config_path: PathBuf,
     comparison: bool,
@@ -72,6 +75,21 @@ pub fn run(
     software: bool,
     tray_test: Option<PathBuf>,
 ) -> Result<()> {
+    // Smoke, capture and tray-test runs may overlap a desktop the user has open.
+    let single = !smoke && tray_test.is_none() && !std::env::args().any(|a| a == "--capture-ui");
+    let wake = if single {
+        let show = !std::env::args().any(|a| a == "--tray");
+        match instance::claim(instance::NAME, show) {
+            Ok(Some(wake)) => Some(wake),
+            Ok(None) => return Ok(()),
+            Err(error) => {
+                eprintln!("{error:#}");
+                None
+            }
+        }
+    } else {
+        None
+    };
     // Windows' built-in Direct3D software adapter also works without an OpenGL
     // driver (server sessions, remote desktops and disposable test machines).
     let mut setup = eframe::egui_wgpu::WgpuSetupCreateNew::default();
@@ -131,6 +149,10 @@ pub fn run(
                 queue: actions.clone(),
                 context: cc.egui_ctx.clone(),
             };
+            if let Some(wake) = wake {
+                let wake_control = control.clone();
+                wake.listen(move || wake_control.request(tray::Action::Open));
+            }
             let click_control = control.clone();
             TrayIconEvent::set_event_handler(Some(move |event| {
                 if tray::opens(&event) {
@@ -192,6 +214,7 @@ pub fn run(
             } else {
                 None
             };
+            let start_in_tray = tray.is_some() && std::env::args().any(|a| a == "--tray");
             Ok(Box::new(Desktop {
                 database,
                 settings_config: {
@@ -215,6 +238,7 @@ pub fn run(
                 _exit: exit,
                 actions,
                 hidden: false,
+                start_in_tray,
                 smoke,
                 config_path,
                 comparison: screen == "comparison",
@@ -444,6 +468,20 @@ impl eframe::App for Desktop {
         }
         if open_settings {
             self.open_settings();
+        }
+        // eframe makes the window visible after painting the first frame,
+        // whatever the viewport asked for, so a tray start hides it on the next.
+        // An Open request (tray, menu or another launch) cancels the hide.
+        if self.start_in_tray {
+            if show {
+                self.start_in_tray = false;
+            } else if ctx.cumulative_pass_nr() == 0 {
+                ctx.request_repaint();
+            } else {
+                self.start_in_tray = false;
+                self.hidden = true;
+                ctx.send_viewport_cmd(ViewportCommand::Visible(false));
+            }
         }
         if show {
             self.hidden = false;
