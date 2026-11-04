@@ -1,4 +1,4 @@
-## Unreleased
+## 1.1.1
 
 - Keeps the learned clock drift when the clock is set or correction pauses, saves it once settled, and loads it at service start. After a restart or a step, the known drift rate runs while measurements rebuild (up to the holdover limit), so the clock settles within minutes instead of about an hour.
 

@@ -1,11 +1,11 @@
-# NetTime Next 1.1.0
+# NetTime Next 1.1.1
 
 Network time monitoring and controlled synchronization for Windows 10/11 x64.
 The desktop and automatic Windows service run natively without a Python runtime.
 
 ## Install
 
-Download `NetTimeNext-1.1.0-Setup-x64.exe` from the GitHub release and run it
+Download `NetTimeNext-1.1.1-Setup-x64.exe` from the GitHub release and run it
 with administrator approval. Verify its SHA-256 against `SHA256SUMS.txt`.
 This installer is unsigned; Windows may show an unknown-publisher warning.
 
@@ -68,6 +68,9 @@ Settings changes preserve ownership and test changed sources before restarting.
 Failed source checks leave the running collector untouched. Failed updates restore
 previous settings. An interrupted update recovers on the next administrator action.
 Filters settle again after a restart, usually around 8-10 minutes with 64-second polls.
+Once the service has learned the PC's clock drift (it saves it after about 17
+minutes of tracking), it keeps applying that drift while filters settle after a
+restart or after the clock is set, so the clock stays close meanwhile.
 
 ## Supported scope and validation
 
