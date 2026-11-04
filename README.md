@@ -2,7 +2,7 @@
   <img src="docs/images/logo.png" width="112" height="112" alt="NetTime Next logo">
 </p>
 
-<h1 align="center">NetTime Next 1.1.1</h1>
+<h1 align="center">NetTime Next 1.1.2</h1>
 
 <p align="center">
   Network time monitoring and controlled synchronization for Windows 10/11 x64, with NTS.<br>
@@ -21,7 +21,7 @@
 
 ## Install
 
-Download `NetTimeNext-1.1.1-Setup-x64.exe` from the GitHub release and run it
+Download `NetTimeNext-1.1.2-Setup-x64.exe` from the GitHub release and run it
 with administrator approval. Verify its SHA-256 against `SHA256SUMS.txt`.
 This installer is unsigned; Windows may show an unknown-publisher warning.
 

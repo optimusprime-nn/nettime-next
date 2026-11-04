@@ -1,11 +1,11 @@
-# NetTime Next 1.1.1
+# NetTime Next 1.1.2
 
 Network time monitoring and controlled synchronization for Windows 10/11 x64.
 The desktop and automatic Windows service run natively without a Python runtime.
 
 ## Install
 
-Download `NetTimeNext-1.1.1-Setup-x64.exe` from the GitHub release and run it
+Download `NetTimeNext-1.1.2-Setup-x64.exe` from the GitHub release and run it
 with administrator approval. Verify its SHA-256 against `SHA256SUMS.txt`.
 This installer is unsigned; Windows may show an unknown-publisher warning.
 

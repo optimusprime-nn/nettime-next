@@ -1,4 +1,4 @@
-## Unreleased
+## 1.1.2
 
 - Renames the sidebar "Refresh measurements" button to "Reload view". It re-reads stored measurements and never made the service measure again.
 
