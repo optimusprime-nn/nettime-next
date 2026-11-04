@@ -57,8 +57,7 @@ You can have 1–32 sources. The same host and port can't be listed twice.
 | Setting | Key | Default | Allowed | What it does |
 | --- | --- | --- | --- | --- |
 | Mode | `clock.mode` | `observe` | `observe` or `slew` | Set by **Take over clock…** and **Restore previous clocks…**. Don't edit it by hand. |
-| Normal tracking limit | `clock.max_offset_ms` | 128 ms | 1–128 ms | Offsets up to this are corrected normally. |
-| Automatic recovery limit | `clock.max_recovery_offset_ms` | 10000 ms | from the tracking limit up to 60000 ms | Larger offsets are recovered gradually up to this limit. Beyond it, correction suspends. |
+| Normal tracking limit | `clock.max_offset_ms` | 128 ms | 1–128 ms | Offsets up to this are slewed. When the sources agree on a larger offset, the clock is set at once. |
 | Maximum correction rate | `clock.max_slew_ppm` | 250 ppm | 1–500 ppm | The fastest the clock is sped up or slowed down. |
 | Maximum holdover | `clock.holdover_seconds` | 900 s | 64–3600 s | How long the current rate is held without a fresh agreeing sample before correction suspends. |
 

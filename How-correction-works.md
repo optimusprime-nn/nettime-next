@@ -75,8 +75,9 @@ every source.
 
 ## 4. Correct
 
-Correction changes the clock's **rate**. It never sets the time directly.
-Windows lets the service make the clock tick slightly faster or slower,
+When the sources agree the clock is within the **Normal tracking limit**
+(128 ms by default), correction changes the clock's **rate**. Windows lets
+the service make the clock tick slightly faster or slower,
 measured in parts per million (ppm). 1 ppm is 1 microsecond per second, or
 86.4 ms per day.
 
@@ -99,13 +100,17 @@ error takes at least 40 seconds to remove.
   samples the rate is held.
 - **Warm-up.** After the service starts, correction waits for three fresh
   samples from the system peer.
-- **Normal tracking limit** (128 ms by default). Within this, correction is
-  normal.
-- **Large offsets.** Above the tracking limit, the service waits for three
-  new samples that agree, then recovers at the maximum correction rate. This
-  continues up to the **Automatic recovery limit** (10 seconds by default).
-- **Beyond the recovery limit** the service suspends correction and asks for
-  manual review. It never steps the clock.
+- **Normal tracking limit** (128 ms by default). Within this, the rate is
+  adjusted as described above.
+- **Large offsets are set at once.** Above the tracking limit, as soon as
+  the minimum number of independent source groups agree, the service sets
+  the clock to the agreed time in one step instead of recovering over hours.
+  This typically happens after a restart: Windows starts from the PC's
+  hardware clock, which drifts. Setting the time also updates that hardware
+  clock, so the next restart begins closer to the right time.
+- **After a step** every filter sample holds the old offset, so the service
+  discards them and waits for fresh ones, about 4 minutes at the default
+  interval. Evidence from before the step can never set the clock again.
 - **Holdover.** If no fresh agreeing sample arrives within **Maximum
   holdover** (900 seconds by default), the service suspends correction and
   puts the clock back to its neutral rate.

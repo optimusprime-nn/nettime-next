@@ -63,10 +63,10 @@ The reason is shown under the heading:
 
 | Reason | Meaning |
 | --- | --- |
-| Offset exceeds automatic recovery limit; manual review required | The clock is further off than the recovery limit (10 s by default). Set the time manually, or raise **Automatic recovery limit** if you trust the sources, and correction resumes. |
 | Filtered sample expired | No fresh agreeing sample within **Maximum holdover**. The clock is back at its neutral rate. It resumes when sources return. |
 | Leap announcement | A source announced a leap second. Correction resumes after it. |
 | Need N eligible source groups | See above. |
+| Waiting for a sample measured after the clock was set | Normal for a few minutes after the service sets the clock. |
 
 ## "CLOCK STATE NEEDS CHECKING" or an ownership conflict
 

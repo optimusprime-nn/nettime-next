@@ -27,8 +27,9 @@ does not serve time to other machines.
   NTP.
 - **Only corrects the clock when sources agree.** At least three independent
   source groups have to agree before it adjusts the clock.
-- **Corrects gradually.** It speeds up or slows down the clock at a bounded
-  rate and never jumps the time forwards or backwards.
+- **Corrects the clock safely.** Small errors are trimmed gradually at a
+  bounded rate. When the sources agree the clock is more than 128 ms out, for
+  example after a restart, it sets the clock to the agreed time at once.
 - **Starts in measurement mode.** A fresh install only watches. It takes
   control of the clock only when an administrator explicitly tells it to,
   and that can be undone.
@@ -60,7 +61,7 @@ does not serve time to other machines.
 
 ## Status
 
-The current version is 1.0.1, and the installer is unsigned. See
+The current version is 1.1.0, and the installer is unsigned. See
 [Scope and validation](Scope-and-validation) for what has and hasn't been
 verified.
 

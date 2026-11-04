@@ -7,8 +7,9 @@ title: "Scope and validation"
 ## What NetTime Next is
 
 - An NTPv4 **client** for Windows 10/11 x64, with NTS support.
-- **Slew-only** clock control. It changes the clock's rate and never steps
-  it.
+- **Agreement-gated** clock control. Small errors are slewed by changing
+  the clock's rate; errors above the tracking limit are set at once when the
+  sources agree.
 - A measurement and evidence tool. Every decision is recorded with its
   reasons.
 
@@ -29,7 +30,7 @@ Release checks cover:
   including tampered, replayed, wrong-key and malformed packets,
 - source filtering, selection and clustering,
 - clock correction in both directions against simulated clocks, including
-  outages, large-offset recovery and holdover,
+  outages, setting the clock on agreed large offsets, and holdover,
 - clock direction measured against a real Windows clock actuator,
 - clock ownership takeover, rollback and failure injection,
 - installed upgrade and uninstall,

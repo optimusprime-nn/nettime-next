@@ -87,8 +87,7 @@ From the command line, as administrator:
 | MEASUREMENT MODE / MEASUREMENT ONLY | Not controlling the clock. |
 | CLOCK FILTER SETTLING | Controlling the clock, but waiting for enough fresh samples. Normal after a start or restart. |
 | GRADUAL CLOCK CORRECTION | Steering the clock towards the agreed time. |
-| CONFIRMING CLOCK RECOVERY | The offset is above the normal tracking limit; checking that three new samples agree before recovering. |
-| GRADUAL CLOCK RECOVERY | Bringing a large offset back at the maximum correction rate. |
+| CLOCK SET TO AGREED TIME | The sources agreed the clock was more than the tracking limit out, and it was set to the agreed time. |
 | WAITING FOR FRESH SAMPLE | Holding the current rate until a new measurement arrives. |
 | CORRECTION SUSPENDED | Stopped correcting. The reason is shown underneath. |
 | CLOCK STATE NEEDS CHECKING | Ownership or service state is not what was expected. See [Troubleshooting](Troubleshooting). |
