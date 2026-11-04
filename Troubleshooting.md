@@ -95,8 +95,10 @@ stops again, check `service-error.log`.
 
 ## The clock wanders by several milliseconds
 
-Some wander right after a restart is normal while the frequency estimate
-settles. That usually takes an hour or two. If it persists:
+Some wander right after the first start is normal while the frequency
+estimate settles. Once the drift is learned and saved (after about 17
+minutes), later restarts and clock steps settle within minutes. If it
+persists:
 
 - Check whether the system peer keeps changing between sources with
   different offsets. Grouping sources that share an upstream helps.

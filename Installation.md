@@ -12,7 +12,7 @@ title: "Installation"
 2. Check the installer's hash before running it:
 
    ```powershell
-   Get-FileHash .\NetTimeNext-1.1.0-Setup-x64.exe -Algorithm SHA256
+   Get-FileHash .\NetTimeNext-1.1.1-Setup-x64.exe -Algorithm SHA256
    ```
 
    The hash must match the line for that file in `SHA256SUMS.txt`.

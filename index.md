@@ -61,7 +61,7 @@ does not serve time to other machines.
 
 ## Status
 
-The current version is 1.1.0, and the installer is unsigned. See
+The current version is 1.1.1, and the installer is unsigned. See
 [Scope and validation](Scope-and-validation) for what has and hasn't been
 verified.
 

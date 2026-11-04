@@ -111,6 +111,13 @@ error takes at least 40 seconds to remove.
 - **After a step** every filter sample holds the old offset, so the service
   discards them and waits for fresh ones, about 4 minutes at the default
   interval. Evidence from before the step can never set the clock again.
+- **Learned drift.** The frequency estimate is the PC's own drift, which
+  doesn't change when the time does, so it is kept through steps and pauses.
+  Once learned (about 17 minutes of tracking) it is saved to
+  `data\clock-drift.json`, at most hourly, and loaded at the next service
+  start if under 30 days old. After a start or a step, a known drift rate is
+  applied straight away while fresh samples arrive, for at most the holdover
+  time, so the clock doesn't drift freely meanwhile.
 - **Holdover.** If no fresh agreeing sample arrives within **Maximum
   holdover** (900 seconds by default), the service suspends correction and
   puts the clock back to its neutral rate.
@@ -120,8 +127,10 @@ error takes at least 40 seconds to remove.
 
 ## Typical behaviour
 
-After a restart there are several minutes of settling, then the offset is
-brought down over tens of minutes. Meanwhile the frequency estimate
-converges on the PC's real drift. On a stable network with nearby stratum-1
+After a restart there are several minutes of settling. With a saved drift
+the clock holds close to the agreed time meanwhile and is trimmed within
+minutes. On a first start, with no saved drift, the offset is brought down
+over tens of minutes while the frequency estimate converges on the PC's real
+drift. On a stable network with nearby stratum-1
 sources, a settled system usually stays within about a millisecond of the
 agreed time.
