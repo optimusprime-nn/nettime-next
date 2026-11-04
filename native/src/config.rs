@@ -40,6 +40,8 @@ pub struct Clock {
     #[serde(deserialize_with = "source_count")]
     pub min_sources: usize,
     pub max_offset_ms: f64,
+    /// No longer used: an agreed offset above `max_offset_ms` sets the clock.
+    /// Kept so existing settings files keep loading and validating.
     pub max_recovery_offset_ms: f64,
     pub max_slew_ppm: f64,
     pub holdover_seconds: f64,

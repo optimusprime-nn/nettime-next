@@ -16,11 +16,11 @@ Click the tray icon to reopen it; Exit desktop app leaves the service running.
 New installations start in measurement mode. Configure your sources, let their
 filters settle, then choose Settings > Clock control > Take over clock when you
 want NetTime Next to control Windows time. Clock takeover needs administrator
-approval and at least three eligible independent source groups. Corrections are
-gradual. Offsets above the normal 128 ms tracking limit enter gradual recovery
-after three new agreeing filter samples, up to a separate 10-second recovery
-limit by default. The correction rate stays bounded; larger errors suspend
-correction for manual review. The controller never steps the clock.
+approval and at least three eligible independent source groups. When those
+groups agree and the clock is more than the 128 ms tracking limit out, for
+example after a restart from a drifted hardware clock, the clock is set to the
+agreed time at once. Smaller errors are trimmed gradually at a bounded rate.
+Loss of agreement or a conflicting clock controller suspends correction.
 
 Upgrading preserves configured sources, history, service identity, startup state
 and active clock ownership. Existing installations retain their directory and

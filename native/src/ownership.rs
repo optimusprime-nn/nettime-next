@@ -395,10 +395,8 @@ pub fn readiness(cfg: &Config, decision: &serde_json::Value, now: f64) -> Result
         (0. ..=cfg.clock.holdover_seconds).contains(&sample_age),
         "Filtered sample expired"
     );
-    ensure!(
-        offset.is_finite() && offset.abs() <= cfg.clock.max_recovery_offset_ms,
-        "Offset exceeds automatic recovery limit; no clock step"
-    );
+    // Any agreed offset is acceptable: one beyond the tracking limit is set at once.
+    ensure!(offset.is_finite(), "No agreed offset is available");
     Ok(())
 }
 pub fn activate(root: &Path, backend: &mut impl Services) -> Result<()> {
@@ -819,7 +817,7 @@ mod tests {
         assert!(activate(&fixture.root, &mut backend).is_err());
         assert_eq!(backend.changes, 0);
         assert!(journal(&fixture.root).unwrap().is_none());
-        let mut cfg = Config::default();
+        let cfg = Config::default();
         let mut d =
             json!({"utc":1000.,"synchronization":{"ready":true,"sample_utc":1000.,"offset_ms":1.}});
         assert!(readiness(&cfg, &d, 1000.).is_ok());
@@ -827,13 +825,11 @@ mod tests {
         d["synchronization"]["offset_ms"] = json!(129.);
         assert!(readiness(&cfg, &d, 1000.).is_ok());
         d["synchronization"]["offset_ms"] = json!(10_001.);
+        assert!(readiness(&cfg, &d, 1000.).is_ok());
+        d["synchronization"]["offset_ms"] = json!(f64::NAN);
         assert!(readiness(&cfg, &d, 1000.).is_err());
         d["synchronization"]["offset_ms"] = json!(1.);
         d["synchronization"]["sample_utc"] = json!(1001.);
-        assert!(readiness(&cfg, &d, 1000.).is_err());
-        cfg.clock.max_offset_ms = 0.5;
-        cfg.clock.max_recovery_offset_ms = 0.5;
-        d["synchronization"]["sample_utc"] = json!(1000.);
         assert!(readiness(&cfg, &d, 1000.).is_err());
     }
 }

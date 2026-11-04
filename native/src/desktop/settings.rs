@@ -243,14 +243,7 @@ impl Desktop {
                         &mut self.settings_config.clock.max_offset_ms,
                         1.,
                         128.,
-                        "ms · larger offsets enter gradual recovery",
-                    ),
-                    (
-                        "Automatic recovery limit",
-                        &mut self.settings_config.clock.max_recovery_offset_ms,
-                        1.,
-                        60_000.,
-                        "ms · larger offsets require manual review",
+                        "ms · larger agreed offsets are set at once",
                     ),
                     (
                         "Maximum correction rate",
@@ -283,9 +276,9 @@ impl Desktop {
         section(
             ui,
             "Clock ownership",
-            "Takeover saves the previous service states, stops competing clock controllers and enables bounded gradual correction.",
+            "Takeover saves the previous service states, stops competing clock controllers and enables clock correction.",
         );
-        ui.label("Offsets above the tracking limit recover gradually after three new agreeing filter samples. Loss of agreement, conflicting controllers and offsets above the recovery limit suspend correction. The controller does not step the clock.");
+        ui.label("When the minimum number of independent source groups agree, an offset above the tracking limit is corrected at once by setting the clock; smaller offsets are trimmed gradually. Loss of agreement or a conflicting controller suspends correction.");
         if self.dirty_settings {
             ui.colored_label(
                 AMBER,

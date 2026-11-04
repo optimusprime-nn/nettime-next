@@ -22,8 +22,9 @@ Test names refer to `#[test]` functions in the named source file, or in
   modes, and no interleaved mode.
 - Optional NTS (RFC 8915) per source. A source marked NTS-required never falls
   back to plain NTP.
-- Clock control by gradually changing the Windows clock rate. The clock is
-  never stepped.
+- Clock control by gradually changing the Windows clock rate. When enough
+  independent source groups agree the clock is more than the tracking limit
+  (128 ms by default) out, it is set to the agreed time at once.
 
 ## RFC 5905: NTPv4
 
@@ -47,7 +48,7 @@ Test names refer to `#[test]` functions in the named source file, or in
 | System peer: lowest stratum, then distance | §11.2.3 | Done | `selection.rs` `assess` | `selection.rs` `group_votes_through_its_best_source_not_the_first_configured` |
 | Minimum survivors (NMIN) | §11.2 | Done (stricter) | `clock.min_sources`, at least 3, counted by independent source group | `selection.rs` `same_group_cannot_multiply_votes`; `config.rs` `release_defaults_have_public_authenticated_groups_and_do_not_take_over` |
 | Leap second announcements | §9.2, §11.3 | Partial | Correction suspends while any survivor announces a leap. The leap itself is left to Windows. | `clock.rs` `stale_excessive_leap_and_holdover_suspend` |
-| Clock discipline: PLL/FLL hybrid, step threshold, stepout | §11.3 | Not in profile | Replaced by the bounded slew controller (see below) | See below |
+| Clock discipline: PLL/FLL hybrid, step threshold, stepout | §11.3 | Not in profile | Replaced by NetTime Next's own controller: step above the tracking limit, bounded slew below it (see below) | See below |
 | Poll process: adaptive poll interval | §13 | Gap | Fixed configured interval (64 s default). Only RATE kiss-o'-death changes it. | `selection.rs` `rate_kiss_of_death_backoff_is_bounded` |
 | Symmetric, broadcast, manycast and server modes | §9, §15 | Not in profile | Not implemented | None |
 
@@ -73,11 +74,11 @@ Test names refer to `#[test]` functions in the named source file, or in
 
 | Behaviour | Status | Implementation | Tests |
 | --- | --- | --- | --- |
-| Correct by changing the clock rate; never step | Done | `clock.rs` | `clock.rs` `closed_loop_converges_for_both_oscillator_directions` |
+| Within the tracking limit, correct by changing the clock rate | Done | `clock.rs` | `clock.rs` `closed_loop_converges_for_both_oscillator_directions`, `offsets_within_the_tracking_limit_are_slewed_not_stepped` |
+| Above the tracking limit, with agreement, set the clock at once | Done | `clock.rs` `WindowsClock::step`, `monitor.rs` | `clock.rs` `agreed_large_offset_sets_the_clock_at_once_in_either_direction`, `the_clock_is_never_set_without_fresh_agreement`, `evidence_from_before_a_step_cannot_set_the_clock_again` |
 | Rate bounded by `max_slew_ppm` | Done | `clock.rs` | `clock.rs` `controller_warms_deduplicates_bounds_and_restores_on_conflict` |
 | Correct direction and quantization of the Windows rate | Done | `clock.rs` | `clock.rs` `frequency_direction_and_quantization_are_correct` |
 | Frequency estimate that tracks drift and ignores system-peer switches | Done | `clock.rs` | `clock.rs` `frequency_estimate_tracks_a_drifting_clock_with_old_samples`, `system_peer_switch_within_one_poll_round_does_not_kick_frequency` |
-| Large offsets recover gradually after three fresh agreeing samples, up to a limit | Done | `clock.rs` | `clock.rs` `large_offsets_recover_in_both_directions_and_survive_an_outage`, `recovery_confirms_new_samples_and_stops_on_lost_agreement`, `recovery_rejects_stale_evidence_and_can_be_disabled_by_its_limit`, `leaving_normal_tracking_requires_fresh_recovery_confirmation` |
 | Holdover limit, then suspend | Done | `clock.rs` | `clock.rs` `stale_excessive_leap_and_holdover_suspend` |
 | Rate read back from Windows must match the request within 1 ppm | Done | `clock.rs` | Runs live; no unit test (needs the real API) |
 | Actual clock response measured against the performance counter | Done, CI only | `validation.rs` `clock_response` | Disposable runners only; not yet run against 1.0.1 |

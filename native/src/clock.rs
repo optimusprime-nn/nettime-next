@@ -1,4 +1,6 @@
-//! Bounded slew controller; construction is restricted to the authorized SCM host.
+//! Clock controller: sets the clock when independent sources agree it is off by
+//! more than the tracking limit, and otherwise slews it at a bounded rate.
+//! Construction is restricted to the authorized SCM host.
 use crate::{
     config::Clock,
     selection::Assessment,
@@ -6,8 +8,15 @@ use crate::{
 };
 use anyhow::{Result, ensure};
 use serde::{Deserialize, Serialize};
-use windows_sys::Win32::System::SystemInformation::{
-    GetSystemTimeAdjustmentPrecise, SetSystemTimeAdjustmentPrecise,
+use windows_sys::Win32::{
+    Foundation::{FILETIME, SYSTEMTIME},
+    System::{
+        SystemInformation::{
+            GetSystemTimeAdjustmentPrecise, GetSystemTimePreciseAsFileTime, SetSystemTime,
+            SetSystemTimeAdjustmentPrecise,
+        },
+        Time::FileTimeToSystemTime,
+    },
 };
 
 pub fn adjustment_for_rate(increment: u64, ppm: f64) -> Result<u64> {
@@ -32,6 +41,8 @@ pub fn rate_for_adjustment(increment: u64, adjustment: u64) -> Result<f64> {
 pub trait Backend {
     fn rate(&mut self, ppm: f64) -> Result<f64>;
     fn restore(&mut self) -> Result<()>;
+    /// Moves the clock by `offset_ms` at once.
+    fn step(&mut self, offset_ms: f64) -> Result<()>;
 }
 pub struct WindowsClock {
     increment: u64,
@@ -65,6 +76,29 @@ impl Backend for WindowsClock {
     fn restore(&mut self) -> Result<()> {
         check(unsafe { SetSystemTimeAdjustmentPrecise(0, 1) })
     }
+    /// Setting the time is also the only documented way to update the PC's
+    /// hardware clock, which Windows reads at the next boot.
+    fn step(&mut self, offset_ms: f64) -> Result<()> {
+        ensure!(offset_ms.is_finite(), "Invalid clock step");
+        let mut now = FILETIME {
+            dwLowDateTime: 0,
+            dwHighDateTime: 0,
+        };
+        unsafe { GetSystemTimePreciseAsFileTime(&mut now) };
+        // FILETIME counts 100 ns; SYSTEMTIME holds milliseconds, so add half a
+        // millisecond for the truncation to round instead.
+        let ticks = ((now.dwHighDateTime as i64) << 32 | now.dwLowDateTime as i64)
+            + (offset_ms * 10_000.).round() as i64
+            + 5_000;
+        ensure!(ticks > 0, "Clock step out of range");
+        let target = FILETIME {
+            dwLowDateTime: ticks as u32,
+            dwHighDateTime: (ticks >> 32) as u32,
+        };
+        let mut time: SYSTEMTIME = unsafe { std::mem::zeroed() };
+        check(unsafe { FileTimeToSystemTime(&target, &mut time) })?;
+        check(unsafe { SetSystemTime(&time) })
+    }
 }
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct Plan {
@@ -74,7 +108,6 @@ pub struct Plan {
     pub frequency_ppm: f64,
     pub offset_ms: Option<f64>,
     pub windows_reported_rate_ppm: Option<f64>,
-    pub recovering: bool,
 }
 impl Plan {
     fn new(action: &str, rate: f64, reason: impl Into<String>) -> Self {
@@ -85,12 +118,10 @@ impl Plan {
             frequency_ppm: 0.,
             offset_ms: None,
             windows_reported_rate_ppm: None,
-            recovering: false,
         }
     }
-    fn evidence(mut self, offset: f64, recovering: bool) -> Self {
+    fn evidence(mut self, offset: f64) -> Self {
         self.offset_ms = offset.is_finite().then_some(offset);
-        self.recovering = recovering;
         self
     }
 }
@@ -110,7 +141,9 @@ pub struct Planner {
     /// between the two sample times rather than only the current one.
     rate_log: Vec<(f64, f64)>,
     updates: usize,
-    recovering: bool,
+    /// Sample time of the assessment that last set the clock. Only samples
+    /// measured after it can be trusted; this survives `reset`.
+    stepped: Option<f64>,
     pub last_good: Option<f64>,
 }
 impl Planner {
@@ -124,12 +157,14 @@ impl Planner {
             rate: 0.,
             rate_log: vec![],
             updates: 0,
-            recovering: false,
+            stepped: None,
             last_good: None,
         }
     }
     pub fn reset(&mut self) {
+        let stepped = self.stepped;
         *self = Self::new(self.options.clone());
+        self.stepped = stepped;
     }
     fn set_rate(&mut self, rate: f64, now: f64) {
         self.rate = rate;
@@ -160,45 +195,41 @@ impl Planner {
     pub fn plan(&mut self, assessment: &Assessment, now: f64) -> Plan {
         let offset = assessment.offset_ms.unwrap_or(f64::NAN);
         let stamp = assessment.sample_mono;
-        let recovering = offset.abs() > self.options.max_offset_ms;
         let reason = if !assessment.ready || !offset.is_finite() {
             Some(assessment.explanation.as_str())
-        } else if offset.abs() > self.options.max_recovery_offset_ms {
-            Some("Offset exceeds automatic recovery limit; manual review required; no clock step")
         } else if !stamp.is_finite()
             || now - stamp > self.options.holdover_seconds
             || stamp > now + 1.
         {
             Some("Filtered sample expired; correction suspended")
+        } else if self.stepped.is_some_and(|s| stamp <= s) {
+            Some("Waiting for a sample measured after the clock was set")
         } else {
             None
         };
         if let Some(reason) = reason {
             self.reset();
-            return Plan::new("suspend", 0., reason).evidence(offset, false);
+            return Plan::new("suspend", 0., reason).evidence(offset);
         }
-        // Large errors require a fresh confirmation sequence, even when the
-        // ordinary tracking loop was already warm. Reversals restart it too.
-        if recovering && (!self.recovering || offset.signum() != self.last_offset.signum()) {
+        // Independent sources agree on the time, so set the clock to it now
+        // rather than slewing a large error away over hours.
+        if offset.abs() > self.options.max_offset_ms {
             self.reset();
+            self.stepped = Some(stamp);
+            return Plan::new("step", 0., "Sources agree; clock set to the agreed time")
+                .evidence(offset);
         }
-        self.recovering = recovering;
         if let Some(last) = self.last_sample {
             if stamp <= last {
                 return Plan::new(
                     "hold",
                     self.rate,
-                    if recovering {
-                        "Gradual recovery continues; waiting for a newer system-peer filter sample"
-                    } else {
-                        "No newer system-peer filter sample; not reused"
-                    },
+                    "No newer system-peer filter sample; not reused",
                 )
-                .evidence(offset, recovering);
+                .evidence(offset);
             }
             if stamp - last > self.options.holdover_seconds {
                 self.reset();
-                self.recovering = recovering;
             }
         }
         // Estimate frequency only over at least half a poll interval (16 s
@@ -234,32 +265,19 @@ impl Planner {
                 "warmup",
                 0.,
                 format!(
-                    "{}: {}/3 new system-peer samples",
-                    if recovering {
-                        "Large-offset recovery confirming agreement"
-                    } else {
-                        "Clock filter settling"
-                    },
+                    "Clock filter settling: {}/3 new system-peer samples",
                     self.updates
                 ),
             )
-            .evidence(offset, recovering);
+            .evidence(offset);
         }
         self.set_rate(
             (self.frequency + offset * 1000. / 1024.)
                 .clamp(-self.options.max_slew_ppm, self.options.max_slew_ppm),
             now,
         );
-        let mut result = Plan::new(
-            "slew",
-            self.rate,
-            if recovering {
-                "Recovering large offset gradually at the configured rate limit; no clock step"
-            } else {
-                "Bounded gradual correction; no clock step"
-            },
-        )
-        .evidence(offset, recovering);
+        let mut result =
+            Plan::new("slew", self.rate, "Bounded gradual correction").evidence(offset);
         result.frequency_ppm = self.frequency;
         result.offset_ms = Some(offset);
         result
@@ -337,6 +355,11 @@ impl<B: Backend> Controller<B> {
             "slew" => {
                 plan.windows_reported_rate_ppm = Some(self.backend.rate(plan.rate_ppm)?);
                 self.suspended = false;
+            }
+            "step" => {
+                self.backend.restore()?;
+                self.backend.step(plan.offset_ms.unwrap_or(f64::NAN))?;
+                self.suspended = true;
             }
             _ => {}
         }
@@ -502,7 +525,8 @@ mod tests {
         assert!(adjustment_for_rate(100, f64::NAN).is_err());
         assert!(adjustment_for_rate(100, 501.).is_err());
     }
-    struct Fake(Rc<RefCell<Vec<f64>>>);
+    /// Records applied rates, and clock steps separately.
+    struct Fake(Rc<RefCell<Vec<f64>>>, Rc<RefCell<Vec<f64>>>);
     impl Backend for Fake {
         fn rate(&mut self, ppm: f64) -> Result<f64> {
             self.0.borrow_mut().push(ppm);
@@ -510,6 +534,10 @@ mod tests {
         }
         fn restore(&mut self) -> Result<()> {
             self.0.borrow_mut().push(0.);
+            Ok(())
+        }
+        fn step(&mut self, offset_ms: f64) -> Result<()> {
+            self.1.borrow_mut().push(offset_ms);
             Ok(())
         }
     }
@@ -524,7 +552,8 @@ mod tests {
     #[test]
     fn controller_warms_deduplicates_bounds_and_restores_on_conflict() {
         let calls = Rc::new(RefCell::new(vec![]));
-        let mut c = Controller::new(Clock::default(), Fake(calls.clone())).unwrap();
+        let mut c =
+            Controller::new(Clock::default(), Fake(calls.clone(), Default::default())).unwrap();
         for stamp in [1., 65.] {
             assert_eq!(
                 c.update(&assessment(stamp, 100.), stamp, true)
@@ -550,7 +579,8 @@ mod tests {
     #[test]
     fn unverifiable_ownership_pauses_without_stopping() {
         let calls = Rc::new(RefCell::new(vec![]));
-        let mut c = Controller::new(Clock::default(), Fake(calls.clone())).unwrap();
+        let mut c =
+            Controller::new(Clock::default(), Fake(calls.clone(), Default::default())).unwrap();
         for stamp in [1., 65., 129.] {
             c.update(&assessment(stamp, 100.), stamp, true).unwrap();
         }
@@ -638,9 +668,8 @@ mod tests {
         assert!(worst_offset < 2., "offset reached {worst_offset:.2} ms");
     }
     #[test]
-    fn stale_excessive_leap_and_holdover_suspend() {
+    fn stale_leap_and_holdover_suspend() {
         let mut p = Planner::new(Clock::default());
-        assert_eq!(p.plan(&assessment(1., 10_001.), 1.).action, "suspend");
         assert_eq!(p.plan(&assessment(1., 1.), 902.).action, "suspend");
         assert_eq!(p.plan(&assessment(10., 1.), 1.).action, "suspend");
         let mut a = assessment(1., 1.);
@@ -648,7 +677,8 @@ mod tests {
         a.explanation = "Leap announcement".into();
         assert_eq!(p.plan(&a, 1.).action, "suspend");
         let calls = Rc::new(RefCell::new(vec![]));
-        let mut c = Controller::new(Clock::default(), Fake(calls.clone())).unwrap();
+        let mut c =
+            Controller::new(Clock::default(), Fake(calls.clone(), Default::default())).unwrap();
         for stamp in [1., 65., 129.] {
             c.update(&assessment(stamp, -5.), stamp, true).unwrap();
         }
@@ -677,115 +707,93 @@ mod tests {
         }
     }
     #[test]
-    fn recovery_confirms_new_samples_and_stops_on_lost_agreement() {
-        let calls = Rc::new(RefCell::new(vec![]));
-        let mut c = Controller::new(Clock::default(), Fake(calls.clone())).unwrap();
-        for stamp in [1., 65.] {
-            let plan = c.update(&assessment(stamp, -2_000.), stamp, true).unwrap();
-            assert_eq!(plan.action, "warmup");
-            assert!(plan.recovering);
-            assert_eq!(*calls.borrow().last().unwrap(), 0.);
-            // Repeated assessments do not advance confirmation or apply a rate.
+    fn agreed_large_offset_sets_the_clock_at_once_in_either_direction() {
+        // Seconds-scale errors (as after a boot from a drifted hardware clock)
+        // and absurd ones alike are set straight to the agreed time.
+        for offset in [-7_800., 2_000., -129., 86_400_000.] {
+            let (rates, steps) = (Rc::default(), Rc::default());
+            let mut c =
+                Controller::new(Clock::default(), Fake(Rc::clone(&rates), Rc::clone(&steps)))
+                    .unwrap();
+            let plan = c.update(&assessment(1., offset), 1., true).unwrap();
+            assert_eq!(plan.action, "step", "{offset}");
+            assert_eq!(plan.offset_ms, Some(offset));
+            assert_eq!(*steps.borrow(), [offset]);
+            // The rate is neutral when the clock is set.
+            assert_eq!(*rates.borrow().last().unwrap(), 0.);
+        }
+    }
+    #[test]
+    fn offsets_within_the_tracking_limit_are_slewed_not_stepped() {
+        let (rates, steps) = (Rc::default(), Rc::default());
+        let mut c =
+            Controller::new(Clock::default(), Fake(Rc::clone(&rates), Rc::clone(&steps))).unwrap();
+        for stamp in [1., 65., 129.] {
+            c.update(&assessment(stamp, -127.), stamp, true).unwrap();
+        }
+        assert!(steps.borrow().is_empty());
+        assert!(*rates.borrow().last().unwrap() < 0.);
+    }
+    #[test]
+    fn the_clock_is_never_set_without_fresh_agreement() {
+        let steps: Rc<RefCell<Vec<f64>>> = Rc::default();
+        let mut c =
+            Controller::new(Clock::default(), Fake(Rc::default(), Rc::clone(&steps))).unwrap();
+        let no_agreement = Assessment {
+            ready: false,
+            ..assessment(1., -7_800.)
+        };
+        assert_eq!(c.update(&no_agreement, 1., true).unwrap().action, "suspend");
+        // Stale evidence.
+        assert_eq!(
+            c.update(&assessment(1., -7_800.), 902., true)
+                .unwrap()
+                .action,
+            "suspend"
+        );
+        let mut unknown = assessment(1., 0.);
+        unknown.offset_ms = Some(f64::NAN);
+        assert_eq!(c.update(&unknown, 1., true).unwrap().action, "suspend");
+        // Unverified or conflicting ownership.
+        assert_eq!(
+            c.update(&assessment(2., -7_800.), 2., Ownership::Unknown)
+                .unwrap()
+                .action,
+            "suspend"
+        );
+        assert!(c.update(&assessment(3., -7_800.), 3., false).is_err());
+        assert!(steps.borrow().is_empty());
+    }
+    #[test]
+    fn evidence_from_before_a_step_cannot_set_the_clock_again() {
+        let steps: Rc<RefCell<Vec<f64>>> = Rc::default();
+        let mut c =
+            Controller::new(Clock::default(), Fake(Rc::default(), Rc::clone(&steps))).unwrap();
+        assert_eq!(
+            c.update(&assessment(10., -7_800.), 10., true)
+                .unwrap()
+                .action,
+            "step"
+        );
+        // The same or an older filter sample, still showing the old offset.
+        for stamp in [10., 9.] {
+            let plan = c.update(&assessment(stamp, -7_800.), 11., true).unwrap();
+            assert_eq!(plan.action, "suspend");
+        }
+        assert_eq!(steps.borrow().len(), 1);
+        // Samples measured after the step resume normal tracking.
+        for stamp in [74., 138.] {
             assert_eq!(
-                c.update(&assessment(stamp, -2_000.), stamp + 1., true)
+                c.update(&assessment(stamp, 0.4), stamp, true)
                     .unwrap()
                     .action,
-                "hold"
+                "warmup"
             );
         }
-        let plan = c.update(&assessment(129., -2_000.), 129., true).unwrap();
-        assert_eq!(plan.action, "slew");
-        assert!(plan.recovering && plan.rate_ppm == -250.);
-        assert_eq!(plan.windows_reported_rate_ppm, Some(-250.));
-        let bad = Assessment {
-            ready: false,
-            ..assessment(193., -2_000.)
-        };
-        assert_eq!(c.update(&bad, 193., true).unwrap().action, "suspend");
-        assert_eq!(*calls.borrow().last().unwrap(), 0.);
         assert_eq!(
-            c.update(&assessment(257., -2_000.), 257., true)
-                .unwrap()
-                .action,
-            "warmup"
+            c.update(&assessment(202., 0.4), 202., true).unwrap().action,
+            "slew"
         );
-        // A sign reversal requires confirmation from scratch.
-        assert_eq!(
-            c.update(&assessment(321., 2_000.), 321., true)
-                .unwrap()
-                .action,
-            "warmup"
-        );
-        assert_eq!(c.planner.updates, 1);
-        assert!(c.update(&assessment(385., 2_000.), 385., false).is_err());
-        assert_eq!(*calls.borrow().last().unwrap(), 0.);
-    }
-    #[test]
-    fn large_offsets_recover_in_both_directions_and_survive_an_outage() {
-        for initial in [-2_000., 2_000.] {
-            for drift in [-35., 35.] {
-                let mut planner = Planner::new(Clock::default());
-                let mut offset = initial;
-                let mut rate = 0.;
-                let mut recovered = false;
-                for step in 0..1600 {
-                    offset -= (drift + rate) * 64. / 1000.;
-                    let stamp = 1. + step as f64 * 64.;
-                    let mut a = assessment(stamp, offset);
-                    // An outage during recovery must pause, then reconfirm.
-                    if (10..30).contains(&step) {
-                        a.ready = false;
-                    }
-                    let plan = planner.plan(&a, stamp);
-                    if !a.ready {
-                        assert_eq!(plan.action, "suspend");
-                    } else {
-                        assert_ne!(plan.action, "suspend");
-                    }
-                    assert!(plan.rate_ppm.abs() <= 250.);
-                    recovered |= plan.action == "slew" && plan.recovering;
-                    rate = plan.rate_ppm;
-                }
-                assert!(recovered);
-                assert!(
-                    offset.abs() < 0.1,
-                    "initial={initial}, drift={drift}, remaining={offset}"
-                );
-                assert!((rate + drift).abs() < 0.1);
-            }
-        }
-    }
-    #[test]
-    fn recovery_rejects_stale_evidence_and_can_be_disabled_by_its_limit() {
-        let mut p = Planner::new(Clock::default());
-        let plan = p.plan(&assessment(1., -2_000.), 902.);
-        assert_eq!(plan.action, "suspend");
-        assert_eq!(plan.offset_ms, Some(-2_000.));
-        let mut p = Planner::new(Clock {
-            max_recovery_offset_ms: 128.,
-            ..Clock::default()
-        });
-        assert_eq!(p.plan(&assessment(1., 129.), 1.).action, "suspend");
-        let mut p = Planner::new(Clock::default());
-        let mut a = assessment(1., 2_000.);
-        a.offset_ms = Some(f64::NAN);
-        assert_eq!(p.plan(&a, 1.).action, "suspend");
-    }
-    #[test]
-    fn leaving_normal_tracking_requires_fresh_recovery_confirmation() {
-        let mut p = Planner::new(Clock::default());
-        for stamp in [1., 65., 129.] {
-            p.plan(&assessment(stamp, -20.), stamp);
-        }
-        let first = p.plan(&assessment(193., -2_000.), 193.);
-        assert_eq!(first.action, "warmup");
-        assert_eq!(first.rate_ppm, 0.);
-        assert!(first.recovering);
-        assert_eq!(p.plan(&assessment(257., -2_000.), 257.).action, "warmup");
-        assert_eq!(p.plan(&assessment(321., -2_000.), 321.).action, "slew");
-        // Returning inside the tracking threshold retains the learned rate loop.
-        let normal = p.plan(&assessment(385., -100.), 385.);
-        assert_eq!(normal.action, "slew");
-        assert!(!normal.recovering);
+        assert_eq!(steps.borrow().len(), 1);
     }
 }

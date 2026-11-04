@@ -22,6 +22,9 @@ pub struct Monitor {
     cycle: i64,
     last_wall: f64,
     last_mono: f64,
+    /// When the sample filters were last cleared for a clock change
+    /// (monotonic seconds). Replies measured earlier are not filtered.
+    cleared: f64,
     next_prune: f64,
     clock: Option<crate::clock::Session>,
     instance: String,
@@ -88,6 +91,7 @@ impl Monitor {
             cycle,
             last_wall: wall,
             last_mono: now,
+            cleared: f64::NEG_INFINITY,
             next_prune: now,
             clock: None,
             instance: String::new(),
@@ -167,6 +171,7 @@ impl Monitor {
             for p in &mut self.peers {
                 p.samples.clear()
             }
+            self.cleared = now;
             if let Some(clock) = &self.clock {
                 clock.update(&selection::Assessment::default(), now)?;
             }
@@ -216,6 +221,9 @@ impl Monitor {
             let p = &mut self.peers[f.peer];
             p.nts = nts;
             p.accept(sample.clone());
+            // A slow reply measured before the clock changed carries the old offset.
+            let cleared = self.cleared;
+            p.samples.retain(|s| s.mono >= cleared);
             p.next_due = mono() + p.interval;
             samples.push(sample);
         }
@@ -227,8 +235,21 @@ impl Monitor {
             let plan = clock.update(&assessment, mono())?;
             let action = serde_json::to_value(plan)?;
             let label = action["action"].as_str().unwrap_or("");
+            if label == "step" {
+                // Every filtered sample now holds the old offset. Start again,
+                // and move the discontinuity baseline past this deliberate change.
+                for p in &mut self.peers {
+                    p.samples.clear()
+                }
+                self.cleared = mono();
+                self.last_wall = utc();
+                self.last_mono = self.cleared;
+            }
             let signature = format!("{}:{}", label, action["reason"]);
-            if self.cfg.diagnostic_logging || label == "slew" || signature != self.last_clock_event
+            if self.cfg.diagnostic_logging
+                || label == "slew"
+                || label == "step"
+                || signature != self.last_clock_event
             {
                 let mut evidence = action.clone();
                 evidence["selected"] = json!(assessment.selected);
