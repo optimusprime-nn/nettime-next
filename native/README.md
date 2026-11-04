@@ -1,11 +1,11 @@
-# NetTime Next 1.0.1
+# NetTime Next 1.1.0
 
 Network time monitoring and controlled synchronization for Windows 10/11 x64.
 The desktop and automatic Windows service run natively without a Python runtime.
 
 ## Install
 
-Download `NetTimeNext-1.0.1-Setup-x64.exe` from the GitHub release and run it
+Download `NetTimeNext-1.1.0-Setup-x64.exe` from the GitHub release and run it
 with administrator approval. Verify its SHA-256 against `SHA256SUMS.txt`.
 This installer is unsigned; Windows may show an unknown-publisher warning.
 
@@ -71,7 +71,7 @@ Filters settle again after a restart, usually around 8-10 minutes with 64-second
 
 ## Supported scope and validation
 
-This release is a Windows NTPv4 client with NTS support and slew-only clock control.
+This release is a Windows NTPv4 client with NTS support and agreement-gated clock control.
 It is not an NTP server. Formal full-RFC conformance certification and extended
 seven-day controlled-clock endurance validation have not been completed. There is
 no claim of certified accuracy or independent security certification.

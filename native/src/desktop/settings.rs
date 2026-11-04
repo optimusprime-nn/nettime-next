@@ -302,7 +302,7 @@ impl Desktop {
                 self.administer(vec!["--rollback".into()]);
             }
         });
-        ui.weak("Both actions request administrator approval. Takeover also checks fresh source agreement and the configured offset limit.");
+        ui.weak("Both actions request administrator approval. Takeover also checks for fresh source agreement.");
     }
     fn service_settings(&mut self, ui: &mut egui::Ui) {
         section(

@@ -2,7 +2,7 @@
   <img src="docs/images/logo.png" width="112" height="112" alt="NetTime Next logo">
 </p>
 
-<h1 align="center">NetTime Next 1.0.1</h1>
+<h1 align="center">NetTime Next 1.1.0</h1>
 
 <p align="center">
   Network time monitoring and controlled synchronization for Windows 10/11 x64, with NTS.<br>
@@ -21,22 +21,26 @@
 
 ## Install
 
-Download `NetTimeNext-1.0.1-Setup-x64.exe` from the GitHub release and run it
+Download `NetTimeNext-1.1.0-Setup-x64.exe` from the GitHub release and run it
 with administrator approval. Verify its SHA-256 against `SHA256SUMS.txt`.
 This installer is unsigned; Windows may show an unknown-publisher warning.
 
 The installer starts the background service with Windows and offers a system-tray
 icon at sign-in. Minimise keeps the desktop on the taskbar. X hides it in the tray.
 Click the tray icon to reopen it; Exit desktop app leaves the service running.
+Opening NetTime Next again brings the running window forward instead of starting
+another copy.
 
 New installations start in measurement mode. Configure your sources, let their
 filters settle, then choose Settings > Clock control > Take over clock when you
 want NetTime Next to control Windows time. Clock takeover needs administrator
-approval and at least three eligible independent source groups. Corrections are
-gradual. Offsets above the normal 128 ms tracking limit enter gradual recovery
-after three new agreeing filter samples, up to a separate 10-second recovery
-limit by default. The correction rate stays bounded; larger errors suspend
-correction for manual review. The controller never steps the clock.
+approval and at least three eligible independent source groups. When those
+groups agree and the clock is more than the 128 ms tracking limit out, for
+example after a restart from a drifted hardware clock, NetTime Next sets the
+clock to the agreed time at once. That also updates the PC's hardware clock, so
+the next restart begins close to the right time. Smaller errors are trimmed
+gradually at a bounded rate. Loss of agreement, stale evidence or a conflicting
+clock controller suspends correction.
 
 <p align="center"><img src="docs/images/clock-control.png" width="760" alt="Settings, Clock control page"><br><sub>Settings &gt; Clock control, in measurement mode</sub></p>
 
@@ -93,7 +97,7 @@ Filters settle again after a restart, usually around 8-10 minutes with 64-second
 
 ## Supported scope and validation
 
-This release is a Windows NTPv4 client with NTS support and slew-only clock control.
+This release is a Windows NTPv4 client with NTS support and agreement-gated clock control.
 It is not an NTP server. Formal full-RFC conformance certification and extended
 seven-day controlled-clock endurance validation have not been completed. There is
 no claim of certified accuracy or independent security certification.
