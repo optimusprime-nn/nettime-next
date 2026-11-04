@@ -565,7 +565,15 @@ impl eframe::App for Desktop {
                     if ui.checkbox(&mut self.dark, "Dark appearance").changed() {
                         self.save_appearance(ctx);
                     }
-                    if ui.button("Refresh measurements").clicked() {
+                    if ui
+                        .button("Reload view")
+                        .on_hover_text(
+                            "Re-reads the latest stored measurements. This window already \
+                             updates every few seconds; the service measures each source \
+                             once per check interval.",
+                        )
+                        .clicked()
+                    {
                         self.refresh();
                     }
                 });
