@@ -5,6 +5,9 @@ AppVersion=1.0.1
 AppPublisher=NetTime Next Project
 DefaultDirName={autopf}\NetTime Next
 DefaultGroupName=NetTime Next
+; Upgrades from the Rust previews would otherwise keep their "NetTime Next Rust
+; Preview" Start menu folder. The program folder keeps its previous location.
+UsePreviousGroup=no
 OutputDir=..\dist
 OutputBaseFilename=NetTimeNext-1.0.1-Setup-x64
 ArchitecturesAllowed=x64compatible
@@ -36,6 +39,7 @@ Source: "target\third-party-licenses\*"; DestDir: "{app}\ThirdPartyLicenses"; Fl
 
 
 [InstallDelete]
+Type: filesandordirs; Name: "{commonprograms}\NetTime Next Rust Preview"
 Type: files; Name: "{userstartup}\NetTime Next Rust.lnk"; Tasks: tray
 
 [Icons]
